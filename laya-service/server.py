@@ -22,7 +22,7 @@ class DecisionRequest(BaseModel):
 async def lifespan(app):
     torch.set_num_threads(int(os.environ.get("LAYA_THREADS", "2")))
     torch.set_num_interop_threads(1)
-    app.state.router = Router(models={"multilingual": "/models/laya"}, device="cpu", max_loaded=1, default="multilingual")
+    app.state.router = Router(models={"multilingual": "/tmp/laya"}, device="cpu", max_loaded=1, default="multilingual")
     app.state.router.load("multilingual")
     app.state.lock = asyncio.Lock()
     yield

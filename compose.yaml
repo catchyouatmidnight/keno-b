@@ -99,7 +99,7 @@ services:
     environment:
       LAYA_THREADS: ${LAYA_THREADS:-2}
     volumes:
-      - ./models/laya:/models/laya:ro
+      - ./models/laya:/models-source:ro
     networks: [private]
     mem_limit: ${LAYA_MEMORY_LIMIT:-3g}
     read_only: true
