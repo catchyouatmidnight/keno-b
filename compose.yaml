@@ -48,10 +48,12 @@ services:
       - --n-gpu-layers
       - "0"
       - --jinja
-      - --chat-template-kwargs
-      - '{"enable_thinking":false}'
+      - --reasoning
+      - "off"
       - --no-webui
-      - --log-disable
+      - --offline
+      - --log-verbosity
+      - "1"
     volumes:
       - ./models:/models:ro
     networks: [private]

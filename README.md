@@ -25,6 +25,15 @@ docker compose logs --tail=80 llm
 docker compose logs --tail=80 backend
 ```
 
+If `llm` restarts, its error log should now explain why. A GPU warning is not fatal for the CPU image. Check that the configured GGUF exists in `models/` (the default file is approximately 2.74 GB), and inspect the last exit state:
+
+```bash
+ls -lh models/
+docker inspect keno-llm-1 --format 'ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}}'
+```
+
+For a missing default model, run `python3 scripts/download-model.py`, then `docker compose up -d --force-recreate llm`. Exit code 1 alone does not identify the cause; use the error log. The pinned runtime uses `--reasoning off`, and `--offline` prevents runtime model downloads.
+
 ### Access a remote server from your computer
 
 The default port binds only to server loopback. Use an SSH tunnel, then open localhost on your computer:
@@ -97,7 +106,7 @@ Memory saving is explicit in v0.1.0. Saying “remember this” in chat does not
 
 ## Privacy
 
-Runtime containers share a Docker network marked `internal:true`; they are not attached to an external-egress network. Only the backend port is published; the raw model API is not exposed to the host. The backend accepts only the local `llm` service or loopback as its inference URL, ignores HTTP proxy environment variables, and never calls an external LLM provider. There are no analytics, remote fonts, external UI scripts, or automatic cloud backups. Personal prompts are not written to access logs; llama logging is disabled by default.
+Runtime containers share a Docker network marked `internal:true`; they are not attached to an external-egress network. Only the backend port is published; the raw model API is not exposed to the host. The backend accepts only the local `llm` service or loopback as its inference URL, ignores HTTP proxy environment variables, and never calls an external LLM provider. There are no analytics, remote fonts, external UI scripts, or automatic cloud backups. Personal prompts are not written to access logs; llama logs only generic output and errors by default, so startup failures remain visible without enabling info/debug prompt logging.
 
 Initial Git/image/package/model downloads contact their respective hosts and reveal ordinary network metadata such as IP address. They do not upload your profile, memories, or chat contents. The optional downloader pins a model revision and verifies SHA256. Existing verified models can be imported for offline installation.
 
