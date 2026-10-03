@@ -13,6 +13,8 @@ bash scripts/setup.sh --download-model
 docker compose up -d --build
 ```
 
+Check `docker compose port gateway 8080` and `curl http://127.0.0.1:8080/health` to verify the published web port. On upgrades, run `docker compose up -d --force-recreate` so the gateway is created and the obsolete backend port mapping is removed.
+
 Open **http://localhost:8080**. Copy `KENO_API_KEY` from your local `.env` into the page’s access-key field. The page includes chat, memories, your profile, personality settings, backup download, and an API reference. The key stays in tab memory and is cleared on refresh/disconnect.
 
 Setup preserves existing `.env` and `data/`. On a genuinely new installation, the profile, memories, and history are empty; the assistant is named Keno. The pretrained base model still has general knowledge. No personal facts are embedded in the repository. No retraining runs during setup or normal chat.
@@ -106,7 +108,7 @@ Memory saving is explicit in v0.1.0. Saying “remember this” in chat does not
 
 ## Privacy
 
-Runtime containers share a Docker network marked `internal:true`; they are not attached to an external-egress network. Only the backend port is published; the raw model API is not exposed to the host. The backend accepts only the local `llm` service or loopback as its inference URL, ignores HTTP proxy environment variables, and never calls an external LLM provider. There are no analytics, remote fonts, external UI scripts, or automatic cloud backups. Personal prompts are not written to access logs; llama logs only generic output and errors by default, so startup failures remain visible without enabling info/debug prompt logging.
+The backend and model share a Docker network marked `internal:true`; neither is attached to an external-egress network. A small Nginx gateway joins that private network and a separate bridge network so Docker can publish the web port reliably. Only the gateway port is published; the backend and raw model API are not exposed directly. The gateway forwards requests only to the backend, has no analytics or provider integrations, and has no mounted database/model files. It does have a bridge network with external connectivity; runtime egress isolation applies to the backend and model, not to the gateway. The backend accepts only the local `llm` service or loopback as its inference URL, ignores HTTP proxy environment variables, and never calls an external LLM provider. There are no analytics, remote fonts, external UI scripts, or automatic cloud backups. Personal prompts are not written to access logs; llama logs only generic output and errors by default, so startup failures remain visible without enabling info/debug prompt logging.
 
 Initial Git/image/package/model downloads contact their respective hosts and reveal ordinary network metadata such as IP address. They do not upload your profile, memories, or chat contents. The optional downloader pins a model revision and verifies SHA256. Existing verified models can be imported for offline installation.
 
@@ -130,7 +132,7 @@ docker compose up -d --no-build
 Export your already-built images to avoid building or downloading images on another compatible server:
 
 ```bash
-docker save -o keno-images.tar keno-backend:local ghcr.io/ggml-org/llama.cpp:server-b11146
+docker save -o keno-images.tar keno-backend:local ghcr.io/ggml-org/llama.cpp:server-b11146 nginx:1.28-alpine
 ```
 
 Copy the repository files, the model file, and the image archive to the new server. Then:
@@ -169,7 +171,7 @@ docker compose up -d --force-recreate
 
 Your profile, personality, and history remain intact. This adapter specifically expects llama.cpp’s `/apply-template`, `/tokenize`, and streaming chat endpoints; it is not a generic remote-provider connector. The configured runtime includes Qwen chat templates and defaults to non-thinking mode. Other model families must be tested with their own template and sampling settings. Text chat is implemented; the default model’s vision features are not exposed.
 
-Start with `CONTEXT_SIZE=4096`, `CPU_THREADS=4`, and `LLM_MEMORY_LIMIT=6g` on an 8 GB machine. Backend memory is capped at 768 MB. A model-loading OOM requires a smaller model or more RAM; increasing context also increases resource use. Reduce thread count on small CPUs. Check `docker stats` on your actual server before treating these defaults as a sizing guarantee.
+Start with `CONTEXT_SIZE=4096`, `CPU_THREADS=4`, and `LLM_MEMORY_LIMIT=6g` on an 8 GB machine. Backend memory is capped at 768 MB; the gateway at 64 MB. A model-loading OOM requires a smaller model or more RAM; increasing context also increases resource use. Reduce thread count on small CPUs. Check `docker stats` on your actual server before treating these defaults as a sizing guarantee.
 
 ## Development and verification
 

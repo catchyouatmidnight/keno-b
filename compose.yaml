@@ -1,11 +1,28 @@
 name: keno
 services:
+  gateway:
+    image: nginx:1.28-alpine
+    entrypoint: [nginx]
+    command: ["-g", "daemon off;"]
+    user: "101:101"
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks: [edge, private]
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 64m
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   backend:
     image: ${KENO_IMAGE:-keno-backend:local}
     build: .
     restart: unless-stopped
-    ports:
-      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
     environment:
       KENO_API_KEY: ${KENO_API_KEY:?Run bash scripts/setup.sh first}
       KENO_DB: /data/keno.db
@@ -63,5 +80,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
 networks:
+  edge:
+    driver: bridge
   private:
     internal: true
