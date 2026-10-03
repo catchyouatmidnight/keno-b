@@ -27,13 +27,17 @@ services:
       KENO_API_KEY: ${KENO_API_KEY:?Run bash scripts/setup.sh first}
       KENO_DB: /data/keno.db
       LLM_URL: http://llm:8080
-      LLM_MODEL: ${MODEL_FILE:-Qwen3.5-4B-Q4_K_M.gguf}
-      CONTEXT_SIZE: ${CONTEXT_SIZE:-4096}
+      LLM_MODEL: ${MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
+      CONTEXT_SIZE: ${CONTEXT_SIZE:-8192}
+      LAYA_URL: http://laya:8000
+      VISION_ENABLED: "true"
     volumes:
       - ./data:/data
     networks: [private]
     depends_on:
       llm:
+        condition: service_started
+      laya:
         condition: service_started
     mem_limit: 768m
     read_only: true
@@ -45,15 +49,20 @@ services:
     restart: unless-stopped
     command:
       - --model
-      - /models/${MODEL_FILE:-Qwen3.5-4B-Q4_K_M.gguf}
+      - /models/${MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
       - --alias
-      - ${MODEL_FILE:-Qwen3.5-4B-Q4_K_M.gguf}
+      - ${MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
+      - --mmproj
+      - /models/${MMPROJ_FILE:-Qwen3.5-2B-mmproj-F16.gguf}
+      - --no-mmproj-offload
+      - --image-max-tokens
+      - "1024"
       - --host
       - 0.0.0.0
       - --port
       - "8080"
       - --ctx-size
-      - ${CONTEXT_SIZE:-4096}
+      - ${CONTEXT_SIZE:-8192}
       - --parallel
       - "1"
       - --threads
@@ -66,7 +75,11 @@ services:
       - "0"
       - --jinja
       - --reasoning
-      - "off"
+      - "auto"
+      - --reasoning-format
+      - deepseek
+      - --reasoning-budget
+      - "384"
       - --no-webui
       - --offline
       - --log-verbosity
@@ -75,6 +88,20 @@ services:
       - ./models:/models:ro
     networks: [private]
     mem_limit: ${LLM_MEMORY_LIMIT:-6g}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  laya:
+    image: keno-laya:local
+    build: ./laya-service
+    restart: unless-stopped
+    environment:
+      LAYA_THREADS: ${LAYA_THREADS:-2}
+    volumes:
+      - ./models/laya:/models/laya:ro
+    networks: [private]
+    mem_limit: ${LAYA_MEMORY_LIMIT:-3g}
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]

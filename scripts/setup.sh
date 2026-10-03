@@ -21,9 +21,9 @@ if [[ $(stat -c '%u' data) != 10001 ]]; then
 fi
 chmod 700 data
 if [[ ${1:-} == --download-model ]]; then
-  python3 scripts/download-model.py
+  python3 scripts/download-model.py --vision --laya
 else
-  echo 'Import your GGUF into models/, or run: python3 scripts/download-model.py'
+  echo 'Import your GGUF into models/, or run: python3 scripts/download-model.py --vision --laya'
 fi
 echo 'Setup ready. Start with: docker compose up -d --build'
 echo 'Open http://localhost:8080 and paste KENO_API_KEY from .env.'

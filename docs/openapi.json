@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Keno personal assistant",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "paths": {
     "/": {
@@ -513,6 +513,131 @@
         }
       }
     },
+    "/api/v1/attachments": {
+      "post": {
+        "summary": "Upload Attachment",
+        "operationId": "upload_attachment_api_v1_attachments_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/conversations/{conversation_id}/attachments": {
+      "get": {
+        "summary": "List Attachments",
+        "operationId": "list_attachments_api_v1_conversations__conversation_id__attachments_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/attachments/{attachment_id}": {
+      "delete": {
+        "summary": "Delete Attachment",
+        "operationId": "delete_attachment_api_v1_attachments__attachment_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Attachment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/chat": {
       "post": {
         "summary": "Chat",
@@ -578,6 +703,36 @@
   },
   "components": {
     "schemas": {
+      "AttachmentInput": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Conversation Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "data_base64": {
+            "type": "string",
+            "maxLength": 11200000,
+            "minLength": 1,
+            "title": "Data Base64"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "name",
+          "data_base64"
+        ],
+        "title": "AttachmentInput"
+      },
       "ChatInput": {
         "properties": {
           "conversation_id": {
@@ -609,6 +764,21 @@
             "minimum": 32.0,
             "title": "Max Tokens",
             "default": 512
+          },
+          "attachment_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attachment Ids"
           }
         },
         "additionalProperties": false,

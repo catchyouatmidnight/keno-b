@@ -1,0 +1,59 @@
+"""Bounded, private Laya decisions. This module never generates chat responses."""
+import math
+import time
+
+import httpx
+from fastapi import HTTPException
+
+QUESTIONS = {
+    "thinking": {"type": "choice", "instructions": "Choose the effort needed to answer the latest user request accurately.",
+                 "criteria": {"quick": "greeting, casual chat, straightforward fact, simple extraction or brief summary",
+                              "deep": "multi-step reasoning, calculations, comparing evidence, contradictions, complex analysis or planning"}},
+    "source": {"type": "choice", "instructions": "Choose the evidence needed for the latest request, considering available attachments.",
+               "criteria": {"text": "answer from conversation or extracted document text; no visual inspection required",
+                            "vision": "inspect photos, screenshots, scanned pages, charts, diagrams or page layout"}},
+    "document_scope": {"type": "choice", "instructions": "Choose how to select document excerpts for the latest request.",
+                       "criteria": {"overview": "summarize or review the document broadly; use excerpts spread across it",
+                                    "focused": "answer a specific question; retrieve matching passages"}},
+}
+
+
+async def decide(client, message, history, attachments):
+    start = time.monotonic()
+    state = {"latest_request": message[:2400], "request_truncated": len(message) > 2400,
+             "recent_conversation": history[-1600:],
+             "attachments": [{k: a[k] for k in ("id", "name", "kind", "pages", "characters")} for a in attachments]}
+    try:
+        response = await client.post("/v1/systemone", json={"state": state, "questions": QUESTIONS,
+                                    "model": "multilingual", "max_len": 1024, "head_max_len": 256})
+        response.raise_for_status()
+        result = response.json()
+        answers = result["answers"]
+        decisions = {}
+        for key, options in (("thinking", {"quick", "deep"}), ("source", {"text", "vision"}),
+                             ("document_scope", {"overview", "focused"})):
+            answer = answers[key]
+            choice = answer["choice"]
+            if choice not in options:
+                raise ValueError("Invalid routing choice")
+            # Prefer calibrated chosen-answer confidence, never entropy confidence.
+            raw = answer.get("answer_confidence")
+            if raw is None:
+                probs = answer["probabilities"]
+                raw = probs[choice] if isinstance(probs, dict) else None
+            confidence = float(raw)
+            if not math.isfinite(confidence) or not 0 <= confidence <= 1:
+                raise ValueError("Invalid routing confidence")
+            decisions[key] = {"choice": choice, "confidence": round(confidence, 4)}
+        uncertain = decisions["thinking"]["confidence"] < 0.65 or state["request_truncated"]
+        # Uncertain complexity gets deeper reasoning; unavailable Laya never silently
+        # turns into a keyword router or sends the request to a hosted provider.
+        thinking = uncertain or decisions["thinking"]["choice"] == "deep"
+        vision = bool(attachments) and (decisions["source"]["choice"] == "vision" or
+                 any(a["kind"] == "image" or not a["characters"] for a in attachments))
+        return {"engine": "laya", "thinking": thinking, "vision": vision,
+                "document_scope": decisions["document_scope"]["choice"],
+                "uncertain": uncertain, "decisions": decisions,
+                "seconds": round(time.monotonic() - start, 3)}
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        raise HTTPException(503, "Local Laya router unavailable or returned an invalid decision; check laya logs")

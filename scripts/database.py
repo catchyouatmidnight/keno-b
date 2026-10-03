@@ -23,10 +23,12 @@ def validate(path):
     with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as c:
         if c.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise ValueError("Backup failed integrity check")
-        if c.execute("PRAGMA user_version").fetchone()[0] != 1:
+        version = c.execute("PRAGMA user_version").fetchone()[0]
+        if version not in {1, 2}:
             raise ValueError("Unsupported backup schema version")
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if tables != TABLES or c.execute("SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view')").fetchone():
+        expected = TABLES | {"attachments"} if version == 2 else TABLES
+        if tables != expected or c.execute("SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view')").fetchone():
             raise ValueError("Unexpected database structure")
         if c.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Backup has broken references")

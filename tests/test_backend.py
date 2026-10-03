@@ -13,14 +13,33 @@ from scripts.database import snapshot, validate
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "DB_PATH", tmp_path / "keno.db")
     monkeypatch.setattr(main, "API_KEY", "test-key-" + "x" * 40)
+    monkeypatch.setattr(main, "CONTEXT_SIZE", 4096)
     with TestClient(main.app) as client:
         client.headers["Authorization"] = "Bearer " + main.API_KEY
+        main.app.state.laya = fake_router()
         yield client
 
 
-def fake_model(mode="ok", seen=None):
+def fake_router(thinking="quick", source="text", confidence=0.9, mode="ok", seen=None, scope="focused"):
+    def handler(request):
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if seen is not None:
+            seen.append(json.loads(request.content))
+        if mode == "offline":
+            raise httpx.ConnectError("offline", request=request)
+        answers = {"thinking": {"choice": thinking, "answer_confidence": confidence},
+                   "source": {"choice": source, "answer_confidence": confidence},
+                   "document_scope": {"choice": scope, "answer_confidence": confidence}}
+        return httpx.Response(200, json={"answers": answers})
+    return httpx.AsyncClient(base_url="http://laya:8000", transport=httpx.MockTransport(handler))
+
+
+def fake_model(mode="ok", seen=None, calls=None):
     def handler(request):
         payload = json.loads(request.content) if request.content else {}
+        if calls is not None:
+            calls.append((request.url.path, payload))
         if request.url.path == "/health":
             return httpx.Response(200, json={"status": "ok"})
         if mode == "offline":
@@ -35,7 +54,8 @@ def fake_model(mode="ok", seen=None):
             if mode == "failure":
                 return httpx.Response(500, json={"error": "failed"})
             chunks = ["Hello ", "Zain"]
-            body = "".join('data: ' + json.dumps({"choices": [{"delta": {"content": chunk}, "finish_reason": None}]}) + '\n\n' for chunk in chunks)
+            body = 'data: ' + json.dumps({"choices": [{"delta": {"reasoning_content": "Private reasoning must not become the answer"}, "finish_reason": None}]}) + '\n\n'
+            body += "".join('data: ' + json.dumps({"choices": [{"delta": {"content": chunk}, "finish_reason": None}]}) + '\n\n' for chunk in chunks)
             if mode != "interrupted":
                 body += 'data: ' + json.dumps({"choices": [{"delta": {}, "finish_reason": "length" if mode == "length" else "stop"}]}) + '\n\ndata: [DONE]\n\n'
             return httpx.Response(200, text=body, headers={"Content-Type": "text/event-stream"})
@@ -207,3 +227,152 @@ def test_long_output_reports_timing_and_truncation(client):
     second = send(client, new_conversation(client), request_id="long-output-002", max_tokens=2048, stream=True)
     assert "event: timing" in second.text and "event: done" in second.text
     assert seen[0][0]["content"] == seen[-1][0]["content"]
+
+
+def upload(client, conversation, name, raw):
+    import base64
+    return client.post('/api/v1/attachments', json={'conversation_id': conversation, 'name': name,
+                       'data_base64': base64.b64encode(raw).decode()})
+
+
+def simple_pdf(texts):
+    objects = [b'', b'']
+    page_ids = []
+    for text in texts:
+        page_id = len(objects) + 1
+        stream_id = page_id + 1
+        font_id = page_id + 2
+        page_ids.append(page_id)
+        objects.append(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {stream_id} 0 R >>'.encode())
+        stream = ('BT /F1 12 Tf 20 350 Td (' + text + ') Tj ET').encode()
+        objects.append(b'<< /Length ' + str(len(stream)).encode() + b' >>\nstream\n' + stream + b'\nendstream')
+        objects.append(b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
+    objects[0] = b'<< /Type /Catalog /Pages 2 0 R >>'
+    objects[1] = ('<< /Type /Pages /Count ' + str(len(page_ids)) + ' /Kids [' + ' '.join(f'{i} 0 R' for i in page_ids) + '] >>').encode()
+    body = b'%PDF-1.4\n'
+    offsets = [0]
+    for i, obj in enumerate(objects, 1):
+        offsets.append(len(body)); body += f'{i} 0 obj\n'.encode() + obj + b'\nendobj\n'
+    xref = len(body)
+    body += f'xref\n0 {len(offsets)}\n0000000000 65535 f \n'.encode()
+    body += b''.join(f'{offset:010d} 00000 n \n'.encode() for offset in offsets[1:])
+    body += f'trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF'.encode()
+    return body
+
+
+def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
+    calls, decisions = [], []
+    main.app.state.llm = fake_model(calls=calls)
+    conversation = new_conversation(client)
+    main.app.state.laya = fake_router(seen=decisions)
+    quick = send(client, conversation).json()
+    assert quick['context']['route']['thinking'] is False
+    assert quick['context']['thinking_budget'] == 0
+    main.app.state.laya = fake_router(thinking='deep', seen=decisions)
+    deep = send(client, conversation, request_id='deep-analysis-001', message='Compare these two plans and explain the tradeoffs').json()
+    assert deep['context']['route']['engine'] == 'laya'
+    assert deep['context']['thinking_budget'] == 384
+    requests = [payload for path, payload in calls if path == '/v1/chat/completions']
+    assert requests[0]['chat_template_kwargs']['enable_thinking'] is False
+    assert requests[1]['chat_template_kwargs']['enable_thinking'] is True
+    assert requests[1]['max_tokens'] == 896
+    assert requests[1]['reasoning_budget_tokens'] == 384
+    assert requests[1]['reasoning_format'] == 'deepseek'
+    assert 'Hello Zain' in decisions[-1]['state']['recent_conversation']
+    main.app.state.laya = fake_router(confidence=0.55)
+    uncertain = send(client, conversation, request_id='uncertain-analysis-001').json()
+    assert uncertain['context']['route']['thinking'] and uncertain['context']['route']['uncertain']
+    main.app.state.laya = fake_router(mode='offline')
+    assert send(client, conversation, request_id='offline-router-001').status_code == 503
+    assert not main.app.state.generation_lock.locked()
+    main.app.state.laya = fake_router(thinking='unknown')
+    assert send(client, conversation, request_id='invalid-router-001').status_code == 503
+    assert send(client, conversation, thinking=True).status_code == 422
+
+
+def test_document_sources_attachment_isolation_and_backup(client, tmp_path):
+    calls = []
+    main.app.state.llm = fake_model(calls=calls)
+    conversation = new_conversation(client)
+    other = new_conversation(client)
+    receipt = upload(client, conversation, 'report.pdf', simple_pdf(['Revenue is 100', 'Profit is 42'])).json()
+    assert receipt['pages'] == 2 and receipt['characters'] > 0
+    response = send(client, conversation, message='What is the profit?', attachment_ids=[receipt['id']])
+    assert response.status_code == 200
+    context = response.json()['context']
+    assert any(source['page'] == 2 for source in context['document_sources'])
+    assert context['document_coverage'] == 'selected excerpts/pages'
+    payload = [p for path, p in calls if path == '/v1/chat/completions'][-1]
+    assert 'Profit is 42' in payload['messages'][-1]['content']
+    assert send(client, other, request_id='foreign-file-001', attachment_ids=[receipt['id']]).status_code == 422
+    assert send(client, conversation, attachment_ids=[]).status_code == 409
+    backup = tmp_path / 'with-files.sqlite3'
+    snapshot(main.DB_PATH, backup); validate(backup)
+    with sqlite3.connect(backup) as db:
+        assert db.execute('SELECT length(raw) FROM attachments').fetchone()[0] > 0
+    assert client.delete('/api/v1/conversations/' + conversation).status_code == 200
+    with main.db() as db:
+        assert db.execute('SELECT count(*) FROM attachments').fetchone()[0] == 0
+
+
+def test_vision_is_local_bounded_and_selected_by_laya(client, monkeypatch):
+    import io
+    from PIL import Image
+    monkeypatch.setattr(main, 'VISION_ENABLED', True)
+    monkeypatch.setattr(main, 'CONTEXT_SIZE', 8192)
+    calls = []
+    main.app.state.llm = fake_model(calls=calls)
+    main.app.state.laya = fake_router(thinking='deep', source='vision')
+    conversation = new_conversation(client)
+    receipt = upload(client, conversation, 'scan.pdf', simple_pdf(['', '', ''])).json()
+    response = send(client, conversation, message='Explain page 2', attachment_ids=[receipt['id']])
+    assert response.status_code == 200
+    context = response.json()['context']
+    assert context['visual_sources'][0]['page'] == 2
+    payload = [p for path, p in calls if path == '/v1/chat/completions'][-1]
+    parts = payload['messages'][-1]['content']
+    assert parts[1]['image_url']['url'].startswith('data:image/jpeg;base64,')
+    assert len(parts) == 2
+    assert context['image_token_reserve'] == 1088
+    assert send(client, conversation, message='Inspect page 99', request_id='bad-page-001').status_code == 422
+    raw = io.BytesIO(); Image.new('RGB', (1800, 1200), 'white').save(raw, 'PNG')
+    image_receipt = upload(client, conversation, 'photo.png', raw.getvalue()).json()
+    # Even an uncertain text decision cannot erase the only available image evidence.
+    main.app.state.laya = fake_router(source='text')
+    image_response = send(client, conversation, request_id='photo-analysis-001', attachment_ids=[image_receipt['id']])
+    assert image_response.json()['context']['route']['vision'] is True
+    monkeypatch.setattr(main, 'VISION_ENABLED', False)
+    assert upload(client, conversation, 'photo.png', raw.getvalue()).status_code == 422
+
+
+def test_upload_validation_and_local_docx_extraction(client):
+    import io
+    import zipfile
+    conversation = new_conversation(client)
+    assert upload(client, conversation, 'bad.pdf', b'not a PDF').status_code == 422
+    assert upload(client, conversation, 'payload.exe', b'bytes').status_code == 422
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, 'w') as z:
+        z.writestr('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Budget 77</w:t></w:r></w:p></w:body></w:document>')
+    receipt = upload(client, conversation, 'notes.docx', archive.getvalue()).json()
+    assert receipt['characters'] == len('Budget 77')
+    invalid = client.post('/api/v1/attachments', json={'conversation_id': conversation, 'name': 'x.txt', 'data_base64': '!not base64'})
+    assert invalid.status_code == 422
+    assert upload(client, conversation, 'huge.txt', b'x' * (8 * 1024 * 1024 + 1)).status_code == 413
+    assert 'data_base64' not in client.get('/api/v1/conversations/' + conversation + '/attachments').text
+
+
+def test_v1_backup_migrates_without_resetting_personal_state(client, tmp_path):
+    client.put('/api/v1/profile', json={'name': 'Zain'})
+    conversation = new_conversation(client)
+    with main.db() as db:
+        db.execute('DROP TABLE attachments')
+        db.execute('PRAGMA user_version=1')
+    legacy = tmp_path / 'legacy.sqlite3'
+    snapshot(main.DB_PATH, legacy); validate(legacy)
+    main.initialize()
+    assert client.get('/api/v1/profile').json()['name'] == 'Zain'
+    assert client.get('/api/v1/conversations/' + conversation).status_code == 200
+    with main.db() as db:
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 2
+        assert db.execute('SELECT count(*) FROM attachments').fetchone()[0] == 0

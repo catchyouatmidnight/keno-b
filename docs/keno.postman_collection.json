@@ -26,6 +26,10 @@
     {
       "key": "conversation_id",
       "value": ""
+    },
+    {
+      "key": "attachment_id",
+      "value": ""
     }
   ],
   "item": [
@@ -234,6 +238,48 @@
         "method": "DELETE",
         "header": [],
         "url": "{{base_url}}/api/v1/memories/preferred_language"
+      }
+    },
+    {
+      "name": "Upload attachment (base64 file bytes)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/attachments",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"conversation_id\": \"{{conversation_id}}\",\n  \"name\": \"notes.txt\",\n  \"data_base64\": \"QnVkZ2V0OiA3Nw==\"\n}"
+        }
+      }
+    },
+    {
+      "name": "List conversation attachments",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/conversations/{{conversation_id}}/attachments"
+      }
+    },
+    {
+      "name": "Chat with selected file (thinking automatic)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/chat",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"conversation_id\": \"{{conversation_id}}\",\n  \"message\": \"Analyze the budget in this file\",\n  \"request_id\": \"{{$guid}}\",\n  \"attachment_ids\": [\n    \"{{attachment_id}}\"\n  ],\n  \"stream\": false,\n  \"max_tokens\": 1024\n}"
+        }
       }
     }
   ]
