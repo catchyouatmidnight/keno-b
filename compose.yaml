@@ -1,0 +1,65 @@
+name: keno
+services:
+  backend:
+    image: ${KENO_IMAGE:-keno-backend:local}
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
+    environment:
+      KENO_API_KEY: ${KENO_API_KEY:?Run bash scripts/setup.sh first}
+      KENO_DB: /data/keno.db
+      LLM_URL: http://llm:8080
+      LLM_MODEL: ${MODEL_FILE:-Qwen3.5-4B-Q4_K_M.gguf}
+      CONTEXT_SIZE: ${CONTEXT_SIZE:-4096}
+    volumes:
+      - ./data:/data
+    networks: [private]
+    depends_on:
+      llm:
+        condition: service_started
+    mem_limit: 768m
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  llm:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-b11146}
+    restart: unless-stopped
+    command:
+      - --model
+      - /models/${MODEL_FILE:-Qwen3.5-4B-Q4_K_M.gguf}
+      - --alias
+      - ${MODEL_FILE:-Qwen3.5-4B-Q4_K_M.gguf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --ctx-size
+      - ${CONTEXT_SIZE:-4096}
+      - --parallel
+      - "1"
+      - --threads
+      - ${CPU_THREADS:-4}
+      - --batch-size
+      - "256"
+      - --ubatch-size
+      - "128"
+      - --n-gpu-layers
+      - "0"
+      - --jinja
+      - --chat-template-kwargs
+      - '{"enable_thinking":false}'
+      - --no-webui
+      - --log-disable
+    volumes:
+      - ./models:/models:ro
+    networks: [private]
+    mem_limit: ${LLM_MEMORY_LIMIT:-6g}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+networks:
+  private:
+    internal: true

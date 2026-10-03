@@ -1,0 +1,240 @@
+{
+  "info": {
+    "name": "Keno self-hosted assistant",
+    "description": "Set api_key locally; create a conversation before chat. {{$guid}} generates a fresh request ID. For retry/idempotency testing, replace it with a fixed ID and reuse the same body.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{api_key}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "api_key",
+      "value": ""
+    },
+    {
+      "key": "conversation_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/status"
+      }
+    },
+    {
+      "name": "Save profile",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/profile",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Your name\",\n  \"background\": \"\",\n  \"preferences\": \"\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Get profile",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/profile"
+      }
+    },
+    {
+      "name": "Set personality",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/identity",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Keno\",\n  \"personality\": \"Warm, candid, concise.\",\n  \"response_examples\": \"\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Save a memory",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/memories/preferred_language",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"key\": \"preferred_language\",\n  \"content\": \"I prefer Indonesian for casual conversation.\",\n  \"category\": \"preference\",\n  \"pinned\": true,\n  \"source_conversation_id\": null,\n  \"expires_at\": null\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "List memories",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/memories"
+      }
+    },
+    {
+      "name": "Create conversation",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/conversations",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"Postman test\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 201) { pm.collectionVariables.set(\"conversation_id\", pm.response.json().id); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat (JSON)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/chat",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"conversation_id\": \"{{conversation_id}}\",\n  \"message\": \"What do you know about me?\",\n  \"request_id\": \"{{$guid}}\",\n  \"stream\": false\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Chat (SSE)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/chat",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"conversation_id\": \"{{conversation_id}}\",\n  \"message\": \"Say hello briefly.\",\n  \"request_id\": \"{{$guid}}\",\n  \"stream\": true\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Read conversation",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/conversations/{{conversation_id}}"
+      }
+    },
+    {
+      "name": "List conversations",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/conversations"
+      }
+    },
+    {
+      "name": "Download data backup",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/backup"
+      }
+    },
+    {
+      "name": "OpenAPI schema",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/openapi.json"
+      }
+    },
+    {
+      "name": "Delete memory",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": "{{base_url}}/api/v1/memories/preferred_language"
+      }
+    }
+  ]
+}
