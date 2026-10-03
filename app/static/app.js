@@ -76,19 +76,20 @@ $('chatForm').onsubmit=handle(async () => {
   const requestId=retry?.text===text && retry?.conversation===conversationId ? retry.id : crypto.randomUUID();
   retry={text,conversation:conversationId,id:requestId};
   busy=true; $('send').disabled=true; $('stop').disabled=false; controller=new AbortController();
-  message('user',text); const output=message('assistant',''); let completed=false;
+  message('user',text); const output=message('assistant',''); let completed=false, firstWord=null;
+  const requestStarted=performance.now();
   notice('Generating locally…');
   try {
-    const response=await api('/chat',{method:'POST',signal:controller.signal,body:JSON.stringify({conversation_id:conversationId,message:text,request_id:requestId,stream:true})});
+    const response=await api('/chat',{method:'POST',signal:controller.signal,body:JSON.stringify({conversation_id:conversationId,message:text,request_id:requestId,stream:true,max_tokens:Number($('outputLimit').value)})});
     const reader=response.body.getReader(), decoder=new TextDecoder(); let buffer='';
     function consume(block) {
       const lines=block.split('\n'); const name=lines.find(line=>line.startsWith('event:'))?.slice(6).trim();
       const raw=lines.filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n');
       if (!raw) return; const data=JSON.parse(raw);
-      if(name==='delta') { output.textContent+=data.text; $('messages').scrollTop=$('messages').scrollHeight; }
+      if(name==='delta') { if(firstWord===null) firstWord=(performance.now()-requestStarted)/1000; output.textContent+=data.text; $('messages').scrollTop=$('messages').scrollHeight; }
       if(name==='context') $('context').textContent='Memories: '+(data.memory_keys.join(', ')||'none')+' · History turns: '+data.history_turns;
       if(name==='error') throw new Error(data.detail);
-      if(name==='done') { completed=true; output.textContent=data.reply; retry=null; $('message').value=''; notice('Saved · '+(data.context.elapsed_seconds||0)+'s'); }
+      if(name==='done') { completed=true; output.textContent=data.reply; retry=null; $('message').value=''; const timings='First word '+(firstWord??data.context.first_token_seconds??0).toFixed(2)+'s · Total '+(data.context.total_seconds??data.context.elapsed_seconds??0)+'s'; notice(data.context.finish_reason==='length'?'Response reached its output limit and may be unfinished. Select a longer output and ask again. · '+timings:'Saved · '+timings); }
     }
     while(true) {
       const {value,done}=await reader.read(); buffer+=decoder.decode(value,{stream:!done}).replace(/\r\n/g,'\n');

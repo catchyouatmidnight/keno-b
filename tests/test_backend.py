@@ -37,7 +37,7 @@ def fake_model(mode="ok", seen=None):
             chunks = ["Hello ", "Zain"]
             body = "".join('data: ' + json.dumps({"choices": [{"delta": {"content": chunk}, "finish_reason": None}]}) + '\n\n' for chunk in chunks)
             if mode != "interrupted":
-                body += 'data: ' + json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]}) + '\n\ndata: [DONE]\n\n'
+                body += 'data: ' + json.dumps({"choices": [{"delta": {}, "finish_reason": "length" if mode == "length" else "stop"}]}) + '\n\ndata: [DONE]\n\n'
             return httpx.Response(200, text=body, headers={"Content-Type": "text/event-stream"})
         raise AssertionError(request.url)
     return httpx.AsyncClient(base_url="http://llm:8080", transport=httpx.MockTransport(handler))
@@ -165,6 +165,7 @@ def test_busy_and_cancellation_release_slot(client):
     async def cancel_stream():
         await main.app.state.generation_lock.acquire()
         generator = main.generate(value, [{'role':'user','content':'Hi'}], {})
+        assert (await anext(generator))[0] == 'timing'
         assert (await anext(generator))[0] == 'delta'
         await generator.aclose()
     client.portal.call(cancel_stream)
@@ -190,3 +191,19 @@ def test_restore_cli_requires_opt_in_and_preserves_data(client, tmp_path):
     validate(destination)
     with sqlite3.connect(destination) as c:
         assert json.loads(c.execute("SELECT value FROM settings WHERE key='profile'").fetchone()[0])['name'] == 'Original owner'
+
+
+def test_long_output_reports_timing_and_truncation(client):
+    seen = []
+    main.app.state.llm = fake_model("length", seen=seen)
+    first = send(client, new_conversation(client), request_id="long-output-001", max_tokens=2048)
+    assert first.status_code == 200
+    context = first.json()["context"]
+    assert context["truncated"] is True and context["finish_reason"] == "length"
+    assert context["max_tokens"] == 2048
+    assert context["context_prepare_seconds"] >= 0
+    assert context["first_token_seconds"] >= context["model_first_token_seconds"] >= 0
+    assert context["total_seconds"] >= context["first_token_seconds"]
+    second = send(client, new_conversation(client), request_id="long-output-002", max_tokens=2048, stream=True)
+    assert "event: timing" in second.text and "event: done" in second.text
+    assert seen[0][0]["content"] == seen[-1][0]["content"]

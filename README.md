@@ -81,7 +81,7 @@ curl http://localhost:8080/api/v1/chat \
   -d '{"conversation_id":"YOUR_CONVERSATION_ID","message":"Hello!","request_id":"first-message-001","stream":false}'
 ```
 
-Set `stream:true` and use `curl -N` for SSE. Events are `context`, `delta`, `done`, and `error`. Only `done` confirms a persisted answer. `finish_reason:length` means the response reached its output limit. Stream failures use an `error` event after HTTP headers have been sent. Non-streaming failures use HTTP 502/503.
+Set `stream:true` and use `curl -N` for SSE. Events are `context`, `timing`, `delta`, `done`, and `error`. Only `done` confirms a persisted answer. `finish_reason:length` means the response reached its output limit. The console warns when this happens. Select a longer output for website/code generation: 512, 1,024, 2,048, or 3,072 tokens. The API defaults to 512 and permits up to 3,072 through `max_tokens`; larger outputs leave less room for profile and history within the 4,096-token context. If the remaining mandatory prompt does not fit, the API returns 422 rather than silently discarding your profile. Stream failures use an `error` event after HTTP headers have been sent. Non-streaming failures use HTTP 502/503.
 
 Clients should supply a unique `request_id` per message and reuse it when retrying that message. Completed requests replay the saved answer without running inference again; using the ID with different text or a different conversation returns 409. Failed turns are retryable. One generation runs at a time; concurrent chat requests return 409 with `Retry-After`, rather than growing a RAM-consuming queue. The backend must run with **one Uvicorn worker / one replica**. A restart marks unfinished turns failed. Partial streamed answers are not retained as completed history.
 
@@ -184,3 +184,9 @@ python3 -m venv .venv
 Tests use a deterministic simulated llama.cpp service to verify auth, fresh installs, cross-chat memory corrections, retries, failure handling, context limits, consistent backups, and restart recovery. They do not measure Qwen’s intelligence, real CPU latency, or Docker egress behavior. A full model startup must be verified on the target server. See `docs/verification.md` for the implementation’s validation record and an actual-model acceptance checklist.
 
 The source project is intentionally backend-first. Android, voice, browser/desktop tools, automatic memory extraction, and model training are not implemented yet.
+
+## Response latency
+
+The console reports time until the first visible word and total server time. Saved response context includes `context_prepare_seconds` (template formatting/tokenization and trimming), `model_first_token_seconds` (generation call until first content token), `first_token_seconds` (server request start until first content token), and `total_seconds`. The browser's first-word measurement also includes tunnel/network latency. These do not measure hidden reasoning tokens. Old/replayed turns retain their original timing metadata.
+
+The system prompt has no changing clock timestamp, allowing a stable prefix to be reused by the model runtime when its cache is available. Profile/personality changes and selected memories still legitimately change context. This is a cache opportunity, not a measured speedup guarantee. The assistant is not automatically given the current date/time; supply it in your question when needed. On this CPU-only deployment, compare short prompts in new and existing chats before switching models. Longer output limits address truncation, not initial-token latency.
