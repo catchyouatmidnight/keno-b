@@ -12,6 +12,9 @@ MAX_ROUNDS = 2
 WRITE_REQUEST = re.compile(r"\b(remember|save|forget|delete|remove|ingat|simpan|hapus|lupakan)\b", re.I)
 FORGET_REQUEST = re.compile(r"\b(forget|delete|remove|hapus|lupakan)\b", re.I)
 FOLLOWUP_SAVE = re.compile(r"^(?:please\s+)?(?:save|remember|simpan|ingat)(?:\s+(?:this|that|it|me|ini|itu|saya))?(?:\s+(?:please|for future chats))?[.!?]*$", re.I)
+# Detect an explicit firsthand save request only for truthful acknowledgement.
+# Laya still selects tools; this never extracts a fact or performs a write.
+FIRSTHAND_SAVE = re.compile(r"^(?:please\s+)?(?:remember|save|simpan|ingat)\s+(?:that\s+)?(?:my\b|i\b|i'm\b|the\s+fact\b|nama\s+saya\b|saya\b)", re.I)
 
 
 class ToolValidationError(ValueError):
@@ -254,7 +257,8 @@ def memory_reply(session, metadata=None):
     """Ground explicit save acknowledgements and memory capability in server state."""
     text = session.value.message.strip()
     memory_save_turn = (metadata or {}).get("route", {}).get("tool_family") == "memory" and any(event["name"] == "memory_save" for event in session.events)
-    if FOLLOWUP_SAVE.fullmatch(text) or memory_save_turn:
+    explicit_save = bool(FIRSTHAND_SAVE.search(text)) and not NO_SAVE.search(text)
+    if FOLLOWUP_SAVE.fullmatch(text) or memory_save_turn or explicit_save:
         saved = [op["quote"] for op in session.mutations if op["action"] == "save"]
         if saved:
             return "Saved: " + "; ".join(dict.fromkeys(saved)) + ". These facts will be available in future chats on this Keno server."

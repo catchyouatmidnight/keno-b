@@ -9,6 +9,30 @@ from app import main
 from scripts.database import snapshot, validate
 
 
+def test_explicit_save_without_tool_cannot_claim_persistence(client):
+    calls = []
+    main.app.state.llm = fake_model(calls=calls)
+    main.app.state.laya = fake_router(family='none')
+    response = send(client, new_conversation(client), message='Remember that my name is Zain.').json()
+    assert response['context']['answer_source'] == 'memory_guard'
+    assert "It hasn't been saved for future chats" in response['reply']
+    assert client.get('/api/v1/memories').json() == []
+    assert not any(path == '/v1/chat/completions' for path, _ in calls)
+
+
+def test_conversation_prompt_separates_roles_and_omits_unavailable_tool_guidance(client):
+    client.put('/api/v1/profile', json={'name': 'Zain'})
+    seen = []
+    main.app.state.llm = fake_model(seen=seen)
+    main.app.state.laya = fake_router(family='none')
+    assert send(client, new_conversation(client), message='What is my name?').status_code == 200
+    prompt = seen[-1][0]['content']
+    assert 'Keno, the ASSISTANT' in prompt and 'The USER is a different person' in prompt
+    assert 'Zain' in prompt
+    assert 'use document_overview' not in prompt
+    assert 'Use calculator for arithmetic' not in prompt
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "DB_PATH", tmp_path / "keno.db")
