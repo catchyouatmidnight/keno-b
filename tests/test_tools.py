@@ -46,7 +46,9 @@ def test_native_memory_save_correct_forget_and_idempotent_replay(client):
 
 
 def test_memory_staging_failed_stream_and_cancel_discard_writes(client):
-    main.app.state.laya = fake_router(family='memory')
+    # A mixed request still generates an answer after staging memory writes.
+    # Memory-only requests now return a deterministic save acknowledgement.
+    main.app.state.laya = fake_router(family='multiple')
     action=[('memory_save', {'key':'user.name', 'quote':"I'm Zain", 'category':'fact'})]
     main.app.state.llm = native_model([action], mode='interrupted')
     assert send(client, new_conversation(client), message="I'm Zain").status_code == 502
