@@ -31,7 +31,7 @@ services:
       CONTEXT_SIZE: ${CONTEXT_SIZE:-8192}
       LAYA_URL: http://laya:8000
       LOOKUP_URL: http://lookup:8000
-      VISION_ENABLED: "true"
+      VISION_ENABLED: ${VISION_ENABLED:-true}
     volumes:
       - ./data:/data
     networks: [private]
@@ -48,16 +48,15 @@ services:
   llm:
     image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-b11146}
     restart: unless-stopped
+    entrypoint: ["/bin/sh", "/config/llm-entrypoint.sh"]
+    environment:
+      VISION_ENABLED: ${VISION_ENABLED:-true}
+      MMPROJ_FILE: ${MMPROJ_FILE:-Qwen3.5-2B-mmproj-F16.gguf}
     command:
       - --model
       - /models/${MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
       - --alias
       - ${MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
-      - --mmproj
-      - /models/${MMPROJ_FILE:-Qwen3.5-2B-mmproj-F16.gguf}
-      - --no-mmproj-offload
-      - --image-max-tokens
-      - "1024"
       - --host
       - 0.0.0.0
       - --port
@@ -84,9 +83,10 @@ services:
       - --no-webui
       - --offline
       - --log-verbosity
-      - "1"
+      - ${LLM_LOG_VERBOSITY:-1}
     volumes:
       - ./models:/models:ro
+      - ./scripts/llm-entrypoint.sh:/config/llm-entrypoint.sh:ro
     networks: [private]
     mem_limit: ${LLM_MEMORY_LIMIT:-6g}
     read_only: true

@@ -238,6 +238,29 @@ Version 0.3 automatically migrates schema 1/2 to 3 while preserving personal dat
 
 ## Change the model
 
+### Try Qwen3 0.6B
+
+This opt-in text profile downloads Unsloth's Qwen3-0.6B Q4_K_M GGUF (approximately 397 MB), pinned to revision `f2d6f9ca53a254cc379437c49e4b2eb447f779df` and verified by SHA256. It keeps the existing Laya router and automatic thinking decisions, uses a 4096-token context, and disables the vision projector. Speed and answer/tool quality must be measured on your server; the smaller model is not a promised latency fix.
+
+```bash
+python3 scripts/download-model.py --model 0.6b
+python3 scripts/enable-fast.py
+docker compose up -d --no-deps --force-recreate llm backend
+```
+
+For a fresh installation, run `bash scripts/setup.sh` and include `--laya` in the download command. Existing chats, memories, profile, credentials, port, CPU threads, and previous model files are preserved. The switch script verifies the downloaded model again before changing `.env` and removes duplicate entries for the settings it changes. Text, DOCX, and PDFs with extracted text remain usable; images, scanned PDF pages, and visual chart interpretation require switching back to vision. Smaller context can mean less attachment/history content fits, while full stored history remains in SQLite.
+
+Return to the installed 2B vision profile with:
+
+```bash
+python3 scripts/enable-analysis.py
+docker compose up -d --no-deps --force-recreate llm backend
+```
+
+Set `LLM_LOG_VERBOSITY=3` in `.env` and recreate `llm` to expose informational processing timings for a controlled benchmark; the default remains `1`. Test a new chat with “hello”, then the same document and memory requests used with 2B. Compare `bash scripts/timings.sh` and the model's `prompt eval time` / `eval time` logs. The first request after restarting has a cold prompt cache.
+
+### Other compatible models
+
 Put a compatible chat GGUF in `models/`, update `MODEL_FILE` in `.env`, and recreate services:
 
 ```bash

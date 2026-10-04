@@ -12,6 +12,10 @@ MODEL = "Qwen3.5-4B-Q4_K_M.gguf"
 SHA256 = "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
 URL = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/720bb031aae5488eae5d6a78768e6d826662b2ae/" + MODEL
 ROOT = Path(__file__).resolve().parent.parent
+FAST_MODEL = "Qwen3-0.6B-Q4_K_M.gguf"
+FAST_REVISION = "f2d6f9ca53a254cc379437c49e4b2eb447f779df"
+FAST_SHA256 = "ac2d97712095a558e31573f62f466a3f9d93990898b0ec79d7c974c1780d524a"
+FAST_URL = f"https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/{FAST_REVISION}/{FAST_MODEL}"
 
 
 def digest(path):
@@ -81,21 +85,23 @@ def download_laya():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=["2b", "4b"], default="2b")
+    parser.add_argument("--model", choices=["0.6b", "2b", "4b"], default="2b")
     parser.add_argument("--vision", action="store_true")
     parser.add_argument("--laya", action="store_true")
     args = parser.parse_args()
     if args.vision and args.model != "2b":
         raise SystemExit("This vision profile requires the matching Qwen 2B model")
     (ROOT / "models").mkdir(exist_ok=True)
-    needed = 1_280_000_000 if args.model == "2b" else 2_740_000_000
+    needed = {"0.6b": 397_000_000, "2b": 1_280_000_000, "4b": 2_740_000_000}[args.model]
     needed += 668_000_000 if args.vision else 0
     needed += 750_000_000 if args.laya else 0
     # Existing files can be verified with no extra space. This check is advisory;
     # each incomplete download is removed on error as before.
     print(f"Setup downloads up to {needed / 1e9:.2f} GB; free disk: {shutil.disk_usage(ROOT).free / 1e9:.2f} GB. No personal data is sent.")
     try:
-        if args.model == "4b":
+        if args.model == "0.6b":
+            download(ROOT / "models" / FAST_MODEL, FAST_URL, FAST_SHA256, maximum=500_000_000)
+        elif args.model == "4b":
             download(ROOT / "models" / MODEL, URL, SHA256)
         else:
             revision = "f6d5376be1edb4d416d56da11e5397a961aca8ae"
