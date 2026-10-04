@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Keno · Personal assistant</title><link rel="stylesheet" href="/static/style.css"><script defer src="/static/app.js"></script></head>
 <body><div class="shell">
 <header><div><span class="mark">k</span><strong>Keno</strong><span class="muted">Personal assistant</span></div><span id="status" class="badge">Not connected</span></header>
-<section id="connection" class="panel"><label for="token">Server access key</label><div class="row"><input id="token" type="password" autocomplete="off" placeholder="Paste the key from your .env file"><button id="connect">Connect</button><button id="disconnect" class="secondary">Disconnect</button></div><small>Kept in this tab’s memory only. Your model and personal data live on your server.</small></section>
+<section id="connection" class="panel"><label for="token">Server access key</label><div class="row"><input id="token" type="password" autocomplete="off" placeholder="Paste once; remembered in this browser"><button id="connect">Connect</button><button id="disconnect" class="secondary">Disconnect &amp; forget key</button></div><small>Saved in this browser. Reconnects automatically after reload. Your model and personal data live on your server.</small></section>
 <nav aria-label="Sections"><button data-tab="chat" class="active">Chat</button><button data-tab="memory">Memories</button><button data-tab="profile">About you</button><button data-tab="identity">Personality</button><button data-tab="api">API</button></nav>
 <div id="notice" role="status" aria-live="polite"></div>
 <main>

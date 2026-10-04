@@ -15,7 +15,7 @@ docker compose up -d --build
 
 Check `docker compose port gateway 8080` and `curl http://127.0.0.1:8080/health` to verify the published web port. On upgrades, run `docker compose up -d --force-recreate` so the gateway is created and the obsolete backend port mapping is removed.
 
-Open **http://localhost:8080**. Copy `KENO_API_KEY` from your local `.env` into the page’s access-key field. The page includes chat, memories, your profile, personality settings, backup download, and an API reference. The key stays in tab memory and is cleared on refresh/disconnect.
+Open **http://localhost:8080**. Copy `KENO_API_KEY` from your local `.env` into the page’s access-key field. The page includes chat, memories, your profile, personality settings, backup download, and an API reference. After a successful connection, the key is saved in this browser’s local storage for this site address, and the page reconnects automatically on reload. Use **Disconnect & forget key** to remove it. A rejected key is also removed; temporary server outages retain it. If browser storage is blocked, the page reports that the key can only be used in the current tab. The server key remains in `.env`; no key is embedded in the published assets.
 
 Setup preserves existing `.env` and `data/`. On a genuinely new installation, the profile, memories, and history are empty; the assistant is named Keno. The pretrained base model still has general knowledge. No personal facts are embedded in the repository. No retraining runs during setup or normal chat.
 

@@ -1,5 +1,9 @@
 'use strict';
 const $ = id => document.getElementById(id);
+const ACCESS_KEY_STORAGE = 'keno.serverAccessKey';
+function savedKey() { try { return localStorage.getItem(ACCESS_KEY_STORAGE) || ''; } catch { return ''; } }
+function rememberKey(value) { try { localStorage.setItem(ACCESS_KEY_STORAGE, value); return true; } catch { return false; } }
+function forgetKey() { try { localStorage.removeItem(ACCESS_KEY_STORAGE); } catch { /* Storage may be blocked. */ } }
 let key = '', conversationId = '', controller = null, sourceConversation = null;
 let retry = null, busy = false, poll = null, uploading = false;
 let attachmentSelection = new Set();
@@ -10,6 +14,10 @@ async function api(path, options = {}) {
     'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json', ...options.headers
   }});
   if (!response.ok) {
+    if (response.status === 401) {
+      forgetKey(); key = ''; $('token').value = ''; clearInterval(poll);
+      $('status').textContent = 'Access key rejected';
+    }
     let data; try { data = await response.json(); } catch { data = {}; }
     throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || 'Request failed'));
   }
@@ -80,17 +88,20 @@ async function newChat() {
   const data = await json('/conversations', {method:'POST', body:JSON.stringify({title:'Chat · ' + new Date().toLocaleString()})});
   conversationId = data.id; retry = null; await refreshConversations(); await loadConversation();
 }
-$('connect').onclick = handle(async () => {
+async function connect() {
   if (busy||uploading) throw new Error('Stop the active response first.');
   clearInterval(poll); key = $('token').value.trim();
   await refreshStatus();
+  const remembered = rememberKey(key);
   const [profile, identity] = await Promise.all([json('/profile'), json('/identity')]);
   $('profileName').value=profile.name; $('background').value=profile.background; $('preferences').value=profile.preferences;
   $('assistantName').value=identity.name; $('personality').value=identity.personality; $('examples').value=identity.response_examples;
-  await refreshConversations(); await loadConversation(); await refreshMemories(); $('token').value=''; notice('Connected.');
+  await refreshConversations(); await loadConversation(); await refreshMemories(); $('token').value='';
+  notice(remembered ? 'Connected. Access key saved in this browser.' : 'Connected for this tab. Browser storage is blocked, so the key cannot be remembered.');
   poll=setInterval(() => refreshStatus().catch(() => { $('status').textContent='Connection lost'; }), 10000);
-});
-$('disconnect').onclick = () => { if(uploading) { notice('Wait for the file upload to finish.'); return; } controller?.abort(); clearInterval(poll); key=''; $('token').value=''; conversationId=''; retry=null; attachmentSelection.clear(); $('attachmentList').replaceChildren(); $('messages').replaceChildren(); $('memoryList').replaceChildren(); $('conversations').replaceChildren(); for (const id of ['profileName','background','preferences','assistantName','personality','examples','memoryKey','memoryContent']) $(id).value=''; $('status').textContent='Disconnected'; notice('Disconnected.'); };
+}
+$('connect').onclick = handle(connect);
+$('disconnect').onclick = () => { if(uploading) { notice('Wait for the file upload to finish.'); return; } controller?.abort(); clearInterval(poll); forgetKey(); key=''; $('token').value=''; conversationId=''; retry=null; attachmentSelection.clear(); $('attachmentList').replaceChildren(); $('messages').replaceChildren(); $('memoryList').replaceChildren(); $('conversations').replaceChildren(); for (const id of ['profileName','background','preferences','assistantName','personality','examples','memoryKey','memoryContent']) $(id).value=''; $('status').textContent='Disconnected'; notice('Disconnected and saved key forgotten.'); };
 document.querySelectorAll('[data-tab]').forEach(button => button.onclick=() => {
   document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.id===button.dataset.tab));
   document.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b===button));
@@ -168,3 +179,8 @@ $('refreshMemories').onclick=handle(refreshMemories);
 async function download(path,filename) { const blob=await (await api(path)).blob(); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000); }
 $('schema').onclick=handle(()=>download('/openapi.json','keno-openapi.json'));
 $('backup').onclick=handle(()=>download('/backup','keno-backup.sqlite3'));
+const rememberedAccessKey = savedKey();
+if (rememberedAccessKey) {
+  $('token').value = rememberedAccessKey;
+  handle(connect)();
+}
