@@ -340,6 +340,26 @@ def test_document_sources_attachment_isolation_and_backup(client, tmp_path):
         assert db.execute('SELECT count(*) FROM attachments').fetchone()[0] == 0
 
 
+def test_vague_document_request_samples_later_pages(client):
+    calls = []
+    main.app.state.llm = fake_model(calls=calls)
+    main.app.state.laya = fake_router(scope='focused')
+    conversation = new_conversation(client)
+    # Common words must not turn a broad request into matches on early pages.
+    pages = ['This is the overview.'] * 10 + ['Migration deadline: April 2027.']
+    receipt = upload(client, conversation, 'plan.pdf', simple_pdf(pages)).json()
+    response = send(client, conversation, message='tell me about this', attachment_ids=[receipt['id']])
+    assert response.status_code == 200
+    context = response.json()['context']
+    selected_pages = [source['page'] for source in context['document_sources']]
+    assert selected_pages == [1, 3, 5, 7, 9, 11]
+    payload = [p for path, p in calls if path == '/v1/chat/completions'][-1]
+    assert 'April 2027' in payload['messages'][-1]['content']
+    assert 'supplied by the application' in payload['messages'][-1]['content']
+    assert 'analyze them directly without internet access' in payload['messages'][0]['content']
+    assert context['document_coverage'] == 'selected excerpts/pages'
+
+
 def test_vision_is_local_bounded_and_selected_by_laya(client, monkeypatch):
     import io
     from PIL import Image

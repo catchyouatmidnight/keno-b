@@ -13,7 +13,7 @@ QUESTIONS = {
                "criteria": {"text": "answer from conversation or extracted document text; no visual inspection required",
                             "vision": "inspect photos, screenshots, scanned pages, charts, diagrams or page layout"}},
     "document_scope": {"type": "choice", "instructions": "Choose how to select document excerpts for the latest request.",
-                       "criteria": {"overview": "summarize or review the document broadly; use excerpts spread across it",
+                       "criteria": {"overview": "general explanation such as 'tell me about this', summarize or review the document broadly; use excerpts spread across it",
                                     "focused": "answer a specific question; retrieve matching passages"}},
 }
 

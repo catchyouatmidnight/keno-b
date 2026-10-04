@@ -13,6 +13,7 @@ import pypdfium2 as pdfium
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_CHARS = 200000
+QUERY_STOP_WORDS = frozenset("a an the this that these those it its i me my you your we our is are was were be been of to for from in on at and or with what which who how please tell about explain summarize summary document file ini itu saya aku kamu anda apa bagaimana tentang tolong jelaskan ringkas dokumen berkas dan di ke dari yang".split())
 Image.MAX_IMAGE_PIXELS = 20_000_000
 
 
@@ -85,14 +86,15 @@ def split(text, page):
 
 
 def retrieve(attachments, query, limit=6, overview=False):
-    words = set(re.findall(r"\w+", query.casefold()))
+    words = set(re.findall(r"\w+", query.casefold())) - QUERY_STOP_WORDS
     all_chunks = [{**chunk, "attachment_id": a["id"], "name": a["name"], "chunk": i + 1}
                   for a in attachments for i, chunk in enumerate(a["sections"])]
-    if overview and all_chunks:
+    scores = [len(words & set(re.findall(r"\w+", c["text"].casefold()))) for c in all_chunks]
+    if all_chunks and (overview or not any(scores)):
         # Spread coverage over the available chunks, preserving file/page labels.
         indices = sorted({round(i * (len(all_chunks) - 1) / max(1, limit - 1)) for i in range(limit)})
         return [all_chunks[i] for i in indices]
-    scored = sorted(all_chunks, key=lambda c: len(words & set(re.findall(r"\w+", c["text"].casefold()))), reverse=True)
+    scored = [chunk for _, chunk in sorted(zip(scores, all_chunks), key=lambda pair: pair[0], reverse=True)]
     # Include representative coverage for each document, then fill with matches.
     # This is bounded excerpt retrieval, not a claim to have read every page.
     chosen = []
