@@ -15,6 +15,13 @@ QUESTIONS = {
     "document_scope": {"type": "choice", "instructions": "Choose how to select document excerpts for the latest request.",
                        "criteria": {"overview": "general explanation such as 'tell me about this', summarize or review the document broadly; use excerpts spread across it",
                                     "focused": "answer a specific question; retrieve matching passages"}},
+    "tool_family": {"type": "choice", "instructions": "Choose tools needed for latest_request. Save firsthand lasting user facts automatically, including introductions and corrections. Do not save facts from attachments or assistant replies.",
+                    "criteria": {"none": "casual chat or general knowledge; no action or lasting personal fact",
+                                 "memory": "user states a lasting personal fact/preference, introduces themselves, asks what is remembered, corrects or forgets a fact",
+                                 "documents": "explain, summarize, search or read selected uploaded files",
+                                 "calculator": "arithmetic calculation",
+                                 "live": "current weather, news or explicit web search",
+                                 "multiple": "request needs more than one tool family"}},
 }
 
 
@@ -23,9 +30,9 @@ async def decide(client, message, history, attachments):
     state = {"latest_request": message[:2400], "request_truncated": len(message) > 2400,
              "earlier_user_requests": history[-600:],
              "attachments": [{k: a[k] for k in ("id", "name", "kind", "pages", "characters")} for a in attachments]}
-    # With no attached evidence, only the effort decision requires inference.
+    # Plain chat needs effort and tool-family decisions only.
     # Laya still decides quick/deep for every request; this is not a keyword router.
-    questions = QUESTIONS if attachments else {"thinking": QUESTIONS["thinking"]}
+    questions = QUESTIONS if attachments else {k: QUESTIONS[k] for k in ("thinking", "tool_family")}
     try:
         response = await client.post("/v1/systemone", json={"state": state, "questions": questions,
                                     "model": "multilingual", "max_len": 1024, "head_max_len": 256})
@@ -34,7 +41,8 @@ async def decide(client, message, history, attachments):
         answers = result["answers"]
         decisions = {}
         for key, options in (("thinking", {"quick", "deep"}), ("source", {"text", "vision"}),
-                             ("document_scope", {"overview", "focused"})):
+                             ("document_scope", {"overview", "focused"}),
+                             ("tool_family", {"none", "memory", "documents", "calculator", "live", "multiple"})):
             if key not in questions:
                 continue
             answer = answers[key]
@@ -59,6 +67,7 @@ async def decide(client, message, history, attachments):
         return {"engine": "laya", "thinking": thinking, "vision": vision,
                 "document_scope": decisions["document_scope"]["choice"] if attachments else "focused",
                 "question_count": len(questions),
+                "tool_family": decisions["tool_family"]["choice"],
                 "uncertain": uncertain, "decisions": decisions,
                 "seconds": round(time.monotonic() - start, 3)}
     except (httpx.HTTPError, ValueError, KeyError, TypeError):

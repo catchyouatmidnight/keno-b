@@ -20,7 +20,7 @@ def client(tmp_path, monkeypatch):
         yield client
 
 
-def fake_router(thinking="quick", source="text", confidence=0.9, mode="ok", seen=None, scope="focused"):
+def fake_router(thinking="quick", source="text", confidence=0.9, mode="ok", seen=None, scope="focused", family="none"):
     def handler(request):
         if request.url.path == "/health":
             return httpx.Response(200, json={"status": "ok"})
@@ -30,7 +30,8 @@ def fake_router(thinking="quick", source="text", confidence=0.9, mode="ok", seen
             raise httpx.ConnectError("offline", request=request)
         answers = {"thinking": {"choice": thinking, "answer_confidence": confidence},
                    "source": {"choice": source, "answer_confidence": confidence},
-                   "document_scope": {"choice": scope, "answer_confidence": confidence}}
+                   "document_scope": {"choice": scope, "answer_confidence": confidence},
+                   "tool_family": {"choice": family, "answer_confidence": confidence}}
         requested = json.loads(request.content)['questions']
         return httpx.Response(200, json={"answers": {key: answers[key] for key in requested}})
     return httpx.AsyncClient(base_url="http://laya:8000", transport=httpx.MockTransport(handler))
@@ -281,8 +282,8 @@ def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
     assert requests[1]['reasoning_format'] == 'deepseek'
     assert 'Hi' in decisions[-1]['state']['earlier_user_requests']
     assert 'Hello Zain' not in decisions[-1]['state']['earlier_user_requests']
-    assert list(decisions[-1]['questions']) == ['thinking']
-    assert quick['context']['route']['question_count'] == 1
+    assert list(decisions[-1]['questions']) == ['thinking', 'tool_family']
+    assert quick['context']['route']['question_count'] == 2
     assert quick['context']['model_first_delta_seconds'] <= quick['context']['model_first_token_seconds']
     assert quick['context']['model_first_reasoning_seconds'] >= 0
     assert quick['context']['hidden_reasoning_seconds'] >= 0
@@ -374,8 +375,8 @@ def test_vision_is_local_bounded_and_selected_by_laya(client, monkeypatch):
     assert response.status_code == 200
     context = response.json()['context']
     assert context['visual_sources'][0]['page'] == 2
-    assert context['route']['question_count'] == 3
-    assert set(context['route']['decisions']) == {'thinking', 'source', 'document_scope'}
+    assert context['route']['question_count'] == 4
+    assert set(context['route']['decisions']) == {'thinking', 'source', 'document_scope', 'tool_family'}
     payload = [p for path, p in calls if path == '/v1/chat/completions'][-1]
     parts = payload['messages'][-1]['content']
     assert parts[1]['image_url']['url'].startswith('data:image/jpeg;base64,')
@@ -414,6 +415,7 @@ def test_v1_backup_migrates_without_resetting_personal_state(client, tmp_path):
     conversation = new_conversation(client)
     with main.db() as db:
         db.execute('DROP TABLE attachments')
+        db.execute('DROP TABLE conversation_summaries')
         db.execute('PRAGMA user_version=1')
     legacy = tmp_path / 'legacy.sqlite3'
     snapshot(main.DB_PATH, legacy); validate(legacy)
@@ -421,5 +423,5 @@ def test_v1_backup_migrates_without_resetting_personal_state(client, tmp_path):
     assert client.get('/api/v1/profile').json()['name'] == 'Zain'
     assert client.get('/api/v1/conversations/' + conversation).status_code == 200
     with main.db() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 2
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 3
         assert db.execute('SELECT count(*) FROM attachments').fetchone()[0] == 0

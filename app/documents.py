@@ -110,6 +110,47 @@ def retrieve(attachments, query, limit=6, overview=False):
     return chosen[:limit]
 
 
+def overview(attachments, budget=12000):
+    """Represent every extracted page within a shared character budget."""
+    groups = []
+    coverage = []
+    for a in attachments:
+        by_page = {}
+        for chunk in a["sections"]:
+            by_page.setdefault(chunk["page"], []).append(chunk["text"])
+        for page, texts in by_page.items():
+            groups.append({"attachment_id": a["id"], "name": a["name"], "page": page, "chunk": 1, "text": "\n".join(texts)})
+        missing = [p for p in range(1, a["pages"] + 1) if p not in by_page] if a["kind"] == "pdf" else []
+        coverage.append({"attachment_id": a["id"], "name": a["name"], "total_pages": a["pages"],
+                         "represented_pages": [p for p in by_page if p is not None], "pages_without_text": missing, "has_extracted_text": bool(by_page)})
+    share = max(1, budget // max(1, len(groups)))
+    shortened = False
+    for group in groups:
+        full = group["text"]
+        group["text"] = full[:share]
+        group["shortened"] = len(full) > share
+        shortened |= group["shortened"]
+    return {"excerpts": groups, "coverage": coverage, "shortened": shortened,
+            "complete_extracted_text": not shortened and not any(c["pages_without_text"] or not c["has_extracted_text"] for c in coverage)}
+
+
+def page_jpeg(raw, number):
+    with pdfium.PdfDocument(raw) as pdf:
+        if not 1 <= number <= len(pdf):
+            raise HTTPException(422, "Requested PDF page is out of range")
+        page = pdf[number - 1]
+        try:
+            bitmap = page.render(scale=min(2.5, 1800 / max(page.get_size())))
+            try:
+                result = io.BytesIO()
+                bitmap.to_pil().convert("RGB").save(result, "JPEG", quality=90)
+                return result.getvalue()
+            finally:
+                bitmap.close()
+        finally:
+            page.close()
+
+
 def visual_inputs(attachments, query, enabled, max_images=2):
     if not enabled:
         return [], []

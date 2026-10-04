@@ -30,6 +30,7 @@ services:
       LLM_MODEL: ${MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
       CONTEXT_SIZE: ${CONTEXT_SIZE:-8192}
       LAYA_URL: http://laya:8000
+      LOOKUP_URL: http://lookup:8000
       VISION_ENABLED: "true"
     volumes:
       - ./data:/data
@@ -106,6 +107,36 @@ services:
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+  lookup:
+    profiles: [live]
+    image: keno-lookup:local
+    build: ./lookup-service
+    restart: unless-stopped
+    environment:
+      KENO_API_KEY: ${KENO_API_KEY:?Run bash scripts/setup.sh first}
+      SEARCH_URL: http://search:8080/search
+    networks: [private, edge]
+    mem_limit: 192m
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  search:
+    profiles: [live]
+    image: ${SEARXNG_IMAGE:-docker.io/searxng/searxng:latest}
+    restart: unless-stopped
+    environment:
+      FORCE_OWNERSHIP: "false"
+      SEARXNG_PORT: "8080"
+      SEARXNG_SECRET: ${KENO_SEARCH_SECRET:-}
+    volumes:
+      - ./deploy/search-settings.yml:/etc/searxng/settings.yml:ro
+      - search_cache:/var/cache/searxng
+    networks: [edge]
+    mem_limit: 512m
+    security_opt: [no-new-privileges:true]
+volumes:
+  search_cache:
 networks:
   edge:
     driver: bridge

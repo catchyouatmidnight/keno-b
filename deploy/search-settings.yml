@@ -1,0 +1,12 @@
+use_default_settings: true
+general:
+  debug: false
+search:
+  formats: [html, json]
+server:
+  secret_key: "set-through-SEARXNG_SECRET"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+outgoing:
+  request_timeout: 5.0

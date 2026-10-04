@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Keno personal assistant",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "paths": {
     "/": {
@@ -77,6 +77,117 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/api/v1/tools/settings": {
+      "get": {
+        "summary": "Get Tool Settings",
+        "operationId": "get_tool_settings_api_v1_tools_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "put": {
+        "summary": "Put Tool Settings",
+        "operationId": "put_tool_settings_api_v1_tools_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/attachments/{attachment_id}/pages/{page}": {
+      "get": {
+        "summary": "Attachment Page",
+        "operationId": "attachment_page_api_v1_attachments__attachment_id__pages__page__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Attachment Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Page"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/profile": {
@@ -930,6 +1041,28 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Profile"
+      },
+      "ToolSettings": {
+        "properties": {
+          "automatic_memory": {
+            "type": "boolean",
+            "title": "Automatic Memory",
+            "default": true
+          },
+          "weather_enabled": {
+            "type": "boolean",
+            "title": "Weather Enabled",
+            "default": false
+          },
+          "search_enabled": {
+            "type": "boolean",
+            "title": "Search Enabled",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ToolSettings"
       },
       "ValidationError": {
         "properties": {

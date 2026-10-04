@@ -24,10 +24,10 @@ def validate(path):
         if c.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise ValueError("Backup failed integrity check")
         version = c.execute("PRAGMA user_version").fetchone()[0]
-        if version not in {1, 2}:
+        if version not in {1, 2, 3}:
             raise ValueError("Unsupported backup schema version")
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        expected = TABLES | {"attachments"} if version == 2 else TABLES
+        expected = TABLES | ({"attachments"} if version >= 2 else set()) | ({"conversation_summaries"} if version >= 3 else set())
         if tables != expected or c.execute("SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view')").fetchone():
             raise ValueError("Unexpected database structure")
         if c.execute("PRAGMA foreign_key_check").fetchone():

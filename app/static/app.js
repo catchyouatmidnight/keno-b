@@ -29,9 +29,48 @@ function handle(fn) { return async event => { event?.preventDefault(); try { awa
 function message(role, text) {
   const element = document.createElement('div'); element.className = 'message ' + role;
   const label = document.createElement('span'); label.className = 'role'; label.textContent = role;
-  const content = document.createElement('span'); content.textContent = text;
+  const content = document.createElement('span'); content.className='message-content'; content._raw=text;
+  if(role==='assistant') KenoMarkdown.render(content,text); else content.textContent=text;
   element.append(label, content); $('messages').append(element);
   $('messages').scrollTop = $('messages').scrollHeight; return content;
+}
+function renderAnswer(output, text, immediate=false) {
+  output._raw=text;
+  if(immediate) { KenoMarkdown.render(output,text);return; }
+  if(output._frame)return;
+  output._frame=requestAnimationFrame(()=>{output._frame=null;KenoMarkdown.render(output,output._raw);$('messages').scrollTop=$('messages').scrollHeight;});
+}
+function toolActivity(output, events, committed=false) {
+  if(!events?.length)return;
+  if(!output._activity) { output._activity=document.createElement('details');output._activity.className='tool-activity';output.before(output._activity); }
+  output._activity.replaceChildren();const summary=document.createElement('summary');
+  summary.textContent='Tools · '+events.length+(events.some(e=>e.status==='running')?' · Working':'');output._activity.append(summary);
+  const labels={memory_search:'Search memories',memory_save:committed?'Save memory':'Prepare memory',memory_forget:committed?'Forget memory':'Prepare forgetting',document_search:'Search document',document_read:'Read pages',document_overview:'Review document text',calculator:'Calculate',weather:'Weather lookup',web_search:'Web search'};
+  for(const item of events) { const row=document.createElement('div');row.textContent=(labels[item.name]||item.name)+(item.memory_key?' · '+item.memory_key:'')+' · '+item.status;output._activity.append(row); }
+}
+let previewUrl=null,previewGeneration=0;
+function closeSource() { previewGeneration++;$('sourceDialog').close();if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl=null; }
+$('closeSource').onclick=closeSource;
+$('sourceDialog').addEventListener('close',()=>{previewGeneration++;if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl=null;});
+async function openSource(source) {
+  const generation=++previewGeneration;
+  if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl=null;
+  $('sourceTitle').textContent=source.name+(source.page?' · Page '+source.page:'');$('sourceBody').replaceChildren();
+  if(!$('sourceDialog').open)$('sourceDialog').showModal();
+  const response=await api('/attachments/'+encodeURIComponent(source.attachment_id)+'/pages/'+(source.page||1));
+  if(generation!==previewGeneration||!$('sourceDialog').open)return;
+  if(response.headers.get('content-type')?.includes('application/json')) { const data=await response.json();if(generation!==previewGeneration)return;const pre=document.createElement('pre');pre.textContent=data.text;$('sourceBody').append(pre); }
+  else { const blob=await response.blob();if(generation!==previewGeneration)return;previewUrl=URL.createObjectURL(blob);const image=document.createElement('img');image.src=previewUrl;image.alt=$('sourceTitle').textContent;$('sourceBody').append(image); }
+}
+function addSources(output, context) {
+  if(output._sources)output._sources.remove();
+  const sources=[...(context.document_sources||[]),...(context.visual_sources||[])],links=context.web_sources||[];
+  if(!sources.length&&!links.length)return;
+  const footer=document.createElement('div');footer.className='sources';output._sources=footer;output.after(footer);
+  const seen=new Set();
+  for(const source of sources) { const key=source.attachment_id+':'+source.page;if(seen.has(key))continue;seen.add(key);
+    const button=document.createElement('button');button.className='secondary';button.textContent=source.name+(source.page?' p.'+source.page:'');button.onclick=handle(()=>openSource(source));footer.append(button); }
+  for(const source of links) { try { const url=new URL(source.url);if(!['http:','https:'].includes(url.protocol))continue;const link=document.createElement('a');link.textContent=source.title||url.hostname;link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';footer.append(link); } catch {} }
 }
 async function refreshStatus() {
   const data = await json('/status');
@@ -48,7 +87,8 @@ async function loadConversation() {
   const data = await json('/conversations/' + conversationId);
   for (const turn of data.turns) {
     message('user', turn.user_text);
-    message('assistant', turn.status === 'complete' ? turn.assistant_text : 'Response interrupted or failed. Resend your message to retry.');
+    const output=message('assistant', turn.status === 'complete' ? turn.assistant_text : 'Response interrupted or failed. Resend your message to retry.');
+    if(turn.status==='complete') { const context=JSON.parse(turn.metadata||'{}');toolActivity(output,context.tool_calls,true);addSources(output,context); }
   }
   await refreshAttachments(true);
 }
@@ -93,15 +133,16 @@ async function connect() {
   clearInterval(poll); key = $('token').value.trim();
   await refreshStatus();
   const remembered = rememberKey(key);
-  const [profile, identity] = await Promise.all([json('/profile'), json('/identity')]);
+  const [profile, identity, toolSettings] = await Promise.all([json('/profile'), json('/identity'), json('/tools/settings')]);
   $('profileName').value=profile.name; $('background').value=profile.background; $('preferences').value=profile.preferences;
   $('assistantName').value=identity.name; $('personality').value=identity.personality; $('examples').value=identity.response_examples;
+  $('automaticMemory').checked=toolSettings.automatic_memory;$('weatherEnabled').checked=toolSettings.weather_enabled;$('searchEnabled').checked=toolSettings.search_enabled;
   await refreshConversations(); await loadConversation(); await refreshMemories(); $('token').value='';
   notice(remembered ? 'Connected. Access key saved in this browser.' : 'Connected for this tab. Browser storage is blocked, so the key cannot be remembered.');
   poll=setInterval(() => refreshStatus().catch(() => { $('status').textContent='Connection lost'; }), 10000);
 }
 $('connect').onclick = handle(connect);
-$('disconnect').onclick = () => { if(uploading) { notice('Wait for the file upload to finish.'); return; } controller?.abort(); clearInterval(poll); forgetKey(); key=''; $('token').value=''; conversationId=''; retry=null; attachmentSelection.clear(); $('attachmentList').replaceChildren(); $('messages').replaceChildren(); $('memoryList').replaceChildren(); $('conversations').replaceChildren(); for (const id of ['profileName','background','preferences','assistantName','personality','examples','memoryKey','memoryContent']) $(id).value=''; $('status').textContent='Disconnected'; notice('Disconnected and saved key forgotten.'); };
+$('disconnect').onclick = () => { if(uploading) { notice('Wait for the file upload to finish.'); return; } controller?.abort(); closeSource();clearInterval(poll); forgetKey(); key=''; $('token').value=''; conversationId=''; retry=null; attachmentSelection.clear(); $('attachmentList').replaceChildren(); $('messages').replaceChildren(); $('memoryList').replaceChildren(); $('conversations').replaceChildren(); for (const id of ['profileName','background','preferences','assistantName','personality','examples','memoryKey','memoryContent']) $(id).value=''; $('status').textContent='Disconnected'; notice('Disconnected and saved key forgotten.'); };
 document.querySelectorAll('[data-tab]').forEach(button => button.onclick=() => {
   document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.id===button.dataset.tab));
   document.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b===button));
@@ -122,7 +163,7 @@ $('chatForm').onsubmit=handle(async () => {
   const requestId=retry?.text===text && retry?.conversation===conversationId && JSON.stringify(retry.ids)===JSON.stringify(ids) ? retry.id : crypto.randomUUID();
   retry={text,conversation:conversationId,id:requestId,ids};
   busy=true; $('send').disabled=true; $('stop').disabled=false; controller=new AbortController();
-  message('user',text); const output=message('assistant',''); let completed=false, firstWord=null;
+  message('user',text); const output=message('assistant',''); let completed=false, firstWord=null, memoryChanged=false;const activities=new Map();
   const requestStarted=performance.now();
   notice('Processing request locally…');
   try {
@@ -132,10 +173,11 @@ $('chatForm').onsubmit=handle(async () => {
       const lines=block.split('\n'); const name=lines.find(line=>line.startsWith('event:'))?.slice(6).trim();
       const raw=lines.filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n');
       if (!raw) return; const data=JSON.parse(raw);
-      if(name==='delta') { if(firstWord===null) firstWord=(performance.now()-requestStarted)/1000; output.textContent+=data.text; $('messages').scrollTop=$('messages').scrollHeight; }
+      if(name==='delta') { if(firstWord===null) firstWord=(performance.now()-requestStarted)/1000;renderAnswer(output,output._raw+data.text); }
+      if(name==='tool') { activities.set(data.index,data);toolActivity(output,Array.from(activities.values())); }
       if(name==='context') { const sources=[...(data.document_sources||[]),...(data.visual_sources||[])]; $('context').textContent='Memories: '+(data.memory_keys.join(', ')||'none')+' · History turns: '+data.history_turns+(sources.length?' · Sources: '+Array.from(new Set(sources.map(s=>s.name+(s.page?' p.'+s.page:'')))).join(', '):''); notice(data.route?.thinking?'Analyzing locally…':'Responding locally…'); }
       if(name==='error') throw new Error(data.detail);
-      if(name==='done') { completed=true; output.textContent=data.reply; retry=null; $('message').value=''; const timings='First word '+(firstWord??data.context.first_token_seconds??0).toFixed(2)+'s · Total '+(data.context.total_seconds??data.context.elapsed_seconds??0)+'s'; notice(data.context.finish_reason==='length'?'Response reached its output limit and may be unfinished. Select a longer output and ask again. · '+timings:'Saved · '+timings); }
+      if(name==='done') { completed=true;renderAnswer(output,data.reply,true);toolActivity(output,data.context.tool_calls,true);addSources(output,data.context);memoryChanged=!!data.context.memory_changes?.length;retry=null; $('message').value=''; const timings='First word '+(firstWord??data.context.first_token_seconds??0).toFixed(2)+'s · Total '+(data.context.total_seconds??data.context.elapsed_seconds??0)+'s'; notice(data.context.finish_reason==='length'?'Response reached its output limit and may be unfinished. Select a longer output and ask again. · '+timings:'Saved · '+timings); }
     }
     while(true) {
       const {value,done}=await reader.read(); buffer+=decoder.decode(value,{stream:!done}).replace(/\r\n/g,'\n');
@@ -143,13 +185,15 @@ $('chatForm').onsubmit=handle(async () => {
       if(done) break;
     }
     if(!completed) throw new Error('Connection ended before completion. Resend to retry.');
+    if(memoryChanged)await refreshMemories();
   } catch(error) {
     notice(error.name==='AbortError'?'Stopped. Resend the same message to retry.':error.message);
-    if(!completed) output.textContent+='\n[Incomplete response — not a confirmed saved answer]';
+    if(!completed)renderAnswer(output,output._raw+'\n[Incomplete response — not a confirmed saved answer]',true);
   } finally { busy=false; $('send').disabled=false; $('stop').disabled=true; controller=null; }
 });
 $('profileForm').onsubmit=handle(async()=>{ await put('/profile',{name:$('profileName').value,background:$('background').value,preferences:$('preferences').value}); notice('Profile saved.'); });
 $('identityForm').onsubmit=handle(async()=>{ await put('/identity',{name:$('assistantName').value,personality:$('personality').value,response_examples:$('examples').value}); notice('Personality saved.'); });
+$('toolsForm').onsubmit=handle(async()=>{await put('/tools/settings',{automatic_memory:$('automaticMemory').checked,weather_enabled:$('weatherEnabled').checked,search_enabled:$('searchEnabled').checked});notice('Tool settings saved.');});
 function clearMemory() { $('memoryForm').reset(); sourceConversation=null; }
 $('clearMemory').onclick=clearMemory;
 $('memoryForm').onsubmit=handle(async()=>{

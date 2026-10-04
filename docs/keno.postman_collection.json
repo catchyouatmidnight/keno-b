@@ -281,6 +281,110 @@
           "raw": "{\n  \"conversation_id\": \"{{conversation_id}}\",\n  \"message\": \"Analyze the budget in this file\",\n  \"request_id\": \"{{$guid}}\",\n  \"attachment_ids\": [\n    \"{{attachment_id}}\"\n  ],\n  \"stream\": false,\n  \"max_tokens\": 1024\n}"
         }
       }
+    },
+    {
+      "name": "Read tool settings",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/tools/settings"
+      }
+    },
+    {
+      "name": "Set tool settings (live lookups off)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/tools/settings",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"automatic_memory\": true,\n  \"weather_enabled\": false,\n  \"search_enabled\": false\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Open source page",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/attachments/{{attachment_id}}/pages/1"
+      }
+    },
+    {
+      "name": "Introduce yourself (automatic memory)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/chat",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"conversation_id\": \"{{conversation_id}}\",\n  \"message\": \"My name is Zain. Remember it.\",\n  \"request_id\": \"{{$guid}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Calculate with local tool",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/chat",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"conversation_id\": \"{{conversation_id}}\",\n  \"message\": \"Calculate 0.1 + 0.2\",\n  \"request_id\": \"{{$guid}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Weather (enable in Tools first)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/chat",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"conversation_id\": \"{{conversation_id}}\",\n  \"message\": \"What is the weather in Jakarta today?\",\n  \"request_id\": \"{{$guid}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
     }
   ]
 }
