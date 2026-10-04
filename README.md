@@ -161,7 +161,7 @@ Automatic memory is enabled by default in Tools. Laya selects a tool family; Qwe
 
 Laya chooses `none`, `memory`, `documents`, `calculator`, `live`, or `multiple`; Qwen uses native llama.cpp tool calls for that family. There are at most two planning rounds and four calls per request, with strict argument validation. The final answer streams after the tool phase. Ordinary chats routed to `none` skip planning. Tool requests add model inference and can take longer on CPU; `tool_seconds` separates this overhead from answer timing. Memory/document results and web snippets are treated as reference data, not instructions. The calculator accepts bounded numeric arithmetic, never Python execution or shell commands.
 
-Weather and web search are **off by default**. If you want them, start the optional services:
+Weather and web search are **off by default**. Simple current-weather questions use a backend answer guard: disabled lookup settings return an explanation, missing/invalid cities ask for a city, unavailable lookups report failure, and successful results are rendered directly from returned temperature/location/time fields. These replies cannot fall through to invented model weather JSON. Broader conceptual/document questions retain the normal model answer path. If you want them, start the optional services:
 
 ```bash
 bash scripts/enable-live.sh

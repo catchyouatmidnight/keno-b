@@ -180,3 +180,57 @@ def test_schema_two_upgrade_keeps_profile_memories_and_attachments(client,tmp_pa
     assert client.get('/api/v1/memories').json()[0]['content']=='Short answers'
     assert client.get('/api/v1/tools/settings').json()=={'automatic_memory':True,'weather_enabled':False,'search_enabled':False}
     assert client.get(f"/api/v1/attachments/{file['id']}/pages/1").json()['text']=='Existing document'
+
+
+def test_weather_disabled_never_generates_fabricated_conditions(client):
+    main.app.state.laya=fake_router(family='none')
+    calls=[]
+    main.app.state.llm=fake_model(calls=calls)
+    response=send(client,new_conversation(client),message='whats the weather today').json()
+    assert response['reply']=='Weather lookups are off. Enable Weather in Tools, then tell me which city to check.'
+    assert response['context']['answer_source']=='weather_guard'
+    assert not any(path=='/v1/chat/completions' for path,_ in calls)
+    assert 'New York' not in response['reply']
+
+
+def test_weather_missing_city_or_invented_tool_city_asks_without_live_claim(client):
+    client.put('/api/v1/tools/settings',json={'weather_enabled':True})
+    main.app.state.laya=fake_router(family='live')
+    outbound=[]
+    def lookup(request):
+        outbound.append(request)
+        raise AssertionError('An invented city must never leave the server')
+    main.app.state.lookup=httpx.AsyncClient(base_url='http://lookup:8000',transport=httpx.MockTransport(lookup))
+    for index,actions in enumerate(([],[[('weather',{'city':'New York'})]])):
+        main.app.state.llm=native_model(actions)
+        reply=send(client,new_conversation(client),request_id=f'weather-no-city-{index}',message='whats the weather today').json()
+        assert reply['reply']=="Which city should I check? I haven't retrieved any weather data yet."
+        assert reply['context']['answer_source']=='weather_guard'
+    assert outbound==[]
+
+
+def test_weather_success_uses_returned_data_and_outage_is_honest(client):
+    client.put('/api/v1/tools/settings',json={'weather_enabled':True})
+    main.app.state.laya=fake_router(family='live')
+    unavailable=False
+    def lookup(request):
+        if unavailable: return httpx.Response(502,json={'detail':'Provider down'})
+        return httpx.Response(200,json={'provider':'Open-Meteo','location':{'name':'Jakarta','country':'Indonesia'},
+            'current':{'temperature_2m':27.5,'apparent_temperature':30,'time':'2026-10-04T15:00'},
+            'current_units':{'temperature_2m':'°C','apparent_temperature':'°C'},'timezone':'Asia/Jakarta',
+            'sources':[{'title':'Open-Meteo','url':'https://open-meteo.com/'}]})
+    main.app.state.lookup=httpx.AsyncClient(base_url='http://lookup:8000',transport=httpx.MockTransport(lookup))
+    main.app.state.llm=native_model([[('weather',{'city':'Jakarta'})]])
+    good=send(client,new_conversation(client),message='Weather in Jakarta today?').json()
+    assert good['reply'].startswith('Jakarta, Indonesia: 27.5°C, feels like 30°C.')
+    assert 'Asia/Jakarta' in good['reply'] and 'Sunny' not in good['reply']
+    assert good['context']['answer_source']=='weather_tool' and good['context']['web_sources']
+    unavailable=True
+    main.app.state.llm=native_model([[('weather',{'city':'Jakarta'})]])
+    bad=send(client,new_conversation(client),request_id='weather-down-001',message='Weather in Jakarta today?').json()
+    assert bad['reply'].startswith("I couldn't retrieve weather for Jakarta.")
+    assert bad['context']['answer_source']=='weather_guard'
+    main.app.state.laya=fake_router(family='none')
+    main.app.state.llm=fake_model()
+    conceptual=send(client,new_conversation(client),request_id='weather-concept-001',message='Explain how weather forecasting works').json()
+    assert conceptual['reply']=='Hello Zain' and 'answer_source' not in conceptual['context']

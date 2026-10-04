@@ -1,6 +1,7 @@
 """Allowlisted local tools. Memory effects remain staged until the answer commits."""
 import ast
 import json
+import math
 import re
 from decimal import Decimal, localcontext
 
@@ -94,6 +95,7 @@ class ToolSession:
         self.value, self.attachments, self.settings = value, attachments, settings
         self.db, self.now, self.lookup = db, now, lookup
         self.mutations, self.events, self.sources, self.web_sources = [], [], [], []
+        self.weather_results, self.weather_city = [], None
 
     def rows(self, query=""):
         with self.db() as c:
@@ -163,9 +165,14 @@ class ToolSession:
             text = args[field]
             if not isinstance(text, str) or not 1 <= len(text) <= 300 or text.casefold() not in self.value.message.casefold():
                 raise ValueError("External lookup input must be supplied in the current user request")
+            if name == "weather": self.weather_city = text
             response = await self.lookup.post("/" + ("weather" if name == "weather" else "search"), json={field: text})
             response.raise_for_status()
             result = response.json()
+            if not isinstance(result, dict): raise ValueError("Invalid lookup result")
+            if name == "weather":
+                if not isinstance(result.get("current"), dict): raise ValueError("Invalid weather result")
+                self.weather_results.append({"city": text, "result": result})
             self.web_sources.extend(result.get("sources", []))
             return result
         raise ValueError("Tool is not implemented")
@@ -177,3 +184,44 @@ class ToolSession:
             else:
                 connection.execute("INSERT INTO memories VALUES (?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET content=excluded.content,category=excluded.category,source_conversation_id=excluded.source_conversation_id,expires_at=NULL,updated_at=excluded.updated_at",
                                    (op["key"], op["quote"], op["category"], int(op["key"] in {"user.name", "user.preferred_language"}), self.value.conversation_id, None, self.now()))
+
+
+def weather_reply(session, metadata):
+    """Guard simple live-weather questions; never infer a city or fabricate data.
+
+    This is an answer safeguard, not a replacement for Laya/tool selection.
+    Broader comparisons, files and conceptual weather questions keep the model path.
+    """
+    text = session.value.message.strip()
+    direct = len(text) <= 300 and not session.attachments and bool(re.search(
+        r"\b(weather|cuaca)\b", text, re.I)) and bool(re.search(
+        r"\b(today|now|currently|current|tonight|in|at|sekarang|hari ini|malam ini|di)\b", text, re.I))
+    if not direct or re.search(r"\b(compare|explain|code|build|api|html|document|how.*work|bandingkan|jelaskan)\b", text, re.I):
+        return None
+    if not session.settings['weather_enabled']:
+        return "Weather lookups are off. Enable Weather in Tools, then tell me which city to check."
+    if not session.weather_results:
+        if session.weather_city:
+            return f"I couldn't retrieve weather for {session.weather_city}. Check that the lookup service is running and try again."
+        return "Which city should I check? I haven't retrieved any weather data yet."
+    replies = []
+    for item in session.weather_results:
+        result = item['result']
+        location = result.get('location') or {}
+        city = ', '.join(str(location[k]) for k in ('name', 'admin1', 'country') if location.get(k)) or item['city']
+        current = result['current']
+        units = result.get('current_units') or {}
+        temperature = current.get('temperature_2m')
+        if type(temperature) not in {int, float} or not math.isfinite(temperature):
+            return "The weather lookup returned incomplete data. Please try again."
+        unit = str(units.get('temperature_2m', ''))
+        reply = f"{city}: {temperature}{unit}"
+        feels = current.get('apparent_temperature')
+        if type(feels) in {int, float} and math.isfinite(feels):
+            reply += f", feels like {feels}{units.get('apparent_temperature', unit)}"
+        reply += "."
+        timestamp = current.get('time')
+        if timestamp: reply += f" Forecast time: {timestamp} ({result.get('timezone') or 'provider local time'})."
+        reply += " Source: Open-Meteo. Model-based weather estimate."
+        replies.append(reply)
+    return '\n'.join(replies)
