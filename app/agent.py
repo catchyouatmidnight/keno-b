@@ -54,11 +54,12 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                 status = "complete"
                 may_continue |= name in {"memory_search", "document_search"}
             except (ValueError, TypeError, KeyError, SyntaxError, ArithmeticError, httpx.HTTPError) as error:
-                detail = str(error) if isinstance(error, tools.MemoryEvidenceError) else "Tool failed validation or is unavailable. Do not claim it succeeded. Ask for missing details or retry with valid arguments."
+                detail = str(error) if isinstance(error, tools.ToolValidationError) else "Tool failed validation or is unavailable. Do not claim it succeeded. Ask for missing details or retry with valid arguments."
                 result = {"error": detail}
                 status = "failed"
                 may_continue = True
             result_event = {**event, "status": status}
+            if status == "failed": result_event["detail"] = result["error"]
             if isinstance(result, dict) and "key" in result: result_event["memory_key"] = result["key"]
             session.events.append(result_event)
             yield "tool", result_event

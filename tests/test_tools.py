@@ -280,4 +280,18 @@ def test_memory_capability_reports_real_settings_and_identity_prompt(client):
     prompt=main.system_prompt([])
     assert 'persistent SQLite memory across chats' in prompt
     assert 'explicit save requests still work' in prompt and 'creator of this Keno app' in prompt
-    assert client.get('/api/v1/status').json()['version']=='0.3.1'
+    assert client.get('/api/v1/status').json()['version']=='0.3.2'
+
+
+def test_memory_quote_accepts_spacing_but_preserves_source_and_rejects_paraphrases(client):
+    main.app.state.laya=fake_router(family='memory')
+    main.app.state.llm=native_model([[('memory_save',{'key':'user.creator','quote':'the fact that im your creator','category':'fact'})]])
+    result=send(client,new_conversation(client),message='the fact that im  your creator').json()
+    assert result['context']['tool_calls'][0]['status']=='complete'
+    assert result['reply'].startswith('Saved: the fact that im  your creator.')
+    assert client.get('/api/v1/memories').json()[0]['content']=='the fact that im  your creator'
+    main.app.state.llm=native_model([[('memory_save',{'key':'user.creator','quote':'Zain created Keno','category':'fact'})]])
+    bad=send(client,new_conversation(client),request_id='paraphrase-rejected-001',message='the fact that im  your creator').json()
+    assert bad['context']['tool_calls'][0]['status']=='failed'
+    assert 'Do not invent or paraphrase' in bad['context']['tool_calls'][0]['detail']
+    assert client.get('/api/v1/memories').json()[0]['content']=='the fact that im  your creator'

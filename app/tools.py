@@ -14,7 +14,11 @@ FORGET_REQUEST = re.compile(r"\b(forget|delete|remove|hapus|lupakan)\b", re.I)
 FOLLOWUP_SAVE = re.compile(r"^(?:please\s+)?(?:save|remember|simpan|ingat)(?:\s+(?:this|that|it|me|ini|itu|saya))?(?:\s+(?:please|for future chats))?[.!?]*$", re.I)
 
 
-class MemoryEvidenceError(ValueError):
+class ToolValidationError(ValueError):
+    pass
+
+
+class MemoryEvidenceError(ToolValidationError):
     pass
 
 
@@ -67,10 +71,10 @@ def catalog(family, settings, message, attachments):
 
 def calculate(expression):
     if not isinstance(expression, str) or not 1 <= len(expression) <= 200:
-        raise ValueError("Expression must contain 1–200 characters")
+        raise ToolValidationError("Expression must contain 1–200 characters")
     tree = ast.parse(expression, mode="eval")
     if len(list(ast.walk(tree))) > 80:
-        raise ValueError("Expression is too complex")
+        raise ToolValidationError("Expression is too complex")
     def visit(node):
         if isinstance(node, ast.Constant) and type(node.value) in {int, float}:
             value = Decimal(str(node.value))
@@ -85,11 +89,11 @@ def calculate(expression):
             elif isinstance(node.op, ast.FloorDiv): value = (a / b).to_integral_value(rounding="ROUND_FLOOR")
             elif isinstance(node.op, ast.Mod): value = a - (a / b).to_integral_value(rounding="ROUND_FLOOR") * b
             elif isinstance(node.op, ast.Pow) and b == int(b) and abs(b) <= 100: value = a ** int(b)
-            else: raise ValueError("Unsupported arithmetic operator or exponent")
+            else: raise ToolValidationError("Unsupported arithmetic operator or exponent")
         else:
-            raise ValueError("Only numbers and arithmetic operators are allowed")
+            raise ToolValidationError("Only numbers and arithmetic operators are allowed")
         if not value.is_finite() or abs(value) > Decimal("1e100"):
-            raise ValueError("Arithmetic result exceeds the limit")
+            raise ToolValidationError("Arithmetic result exceeds the limit")
         return value
     with localcontext() as context:
         context.prec = 28
@@ -122,40 +126,43 @@ class ToolSession:
         if is_followup:
             with self.db() as c:
                 candidates += [r[0] for r in c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 4", (self.value.conversation_id,)) if not NO_SAVE.search(r[0]) and not FOLLOWUP_SAVE.fullmatch(r[0].strip())]
+        words = re.split(r"\s+", value.strip())
+        if not words or not any(words): raise MemoryEvidenceError("The quote must contain a fact, not just spaces.")
+        pattern = r"\s+".join(re.escape(word) for word in words)
         for text in candidates:
-            match = re.search(re.escape(value), text, re.I)
-            if match:
+            match = re.search(pattern, text, re.I)
+            if match and len(match.group(0)) <= 1000:
                 return match.group(0)
         raise MemoryEvidenceError("Copy the fact verbatim from a USER message, not an assistant answer. Earlier user messages are allowed only for an explicit follow-up such as save or remember that. Do not invent or paraphrase the quote.")
 
     async def execute(self, name, args):
         if name not in SPECS or not isinstance(args, dict):
-            raise ValueError("Unknown tool or invalid arguments")
+            raise ToolValidationError("Unknown tool or invalid arguments")
         schema = SPECS[name]["function"]["parameters"]
         if set(args) != set(schema["required"]):
-            raise ValueError("Tool arguments do not match the schema")
+            raise ToolValidationError("Tool arguments do not match the schema")
         if name == "memory_search":
             query = args["query"]
-            if not isinstance(query, str) or len(query) > 200: raise ValueError("Memory query exceeds limit")
+            if not isinstance(query, str) or len(query) > 200: raise ToolValidationError("Memory query exceeds limit")
             return {"memories": self.rows(query)}
         if name in {"memory_save", "memory_forget"}:
             key = args["key"]
-            if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,100}", key): raise ValueError("Invalid memory key")
+            if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,100}", key): raise ToolValidationError("Invalid memory key")
             quote = self.quote(args["quote"], followup=name == "memory_save")
-            if name == "memory_save" and NO_SAVE.search(self.value.message): raise ValueError("The user requested no memory saving")
+            if name == "memory_save" and NO_SAVE.search(self.value.message): raise ToolValidationError("The user requested no memory saving")
             if name == "memory_forget":
-                if not FORGET_REQUEST.search(self.value.message): raise ValueError("Forgetting requires an explicit current-user request")
+                if not FORGET_REQUEST.search(self.value.message): raise ToolValidationError("Forgetting requires an explicit current-user request")
                 if not any(r["key"] == key for r in self.rows(key)): return {"deleted": False, "key": key}
                 self.mutations.append({"action": "forget", "key": key})
                 return {"key": key, "deleted": True, "commits_with_answer": True}
-            if not self.settings["automatic_memory"] and not WRITE_REQUEST.search(self.value.message): raise ValueError("Automatic memory is disabled")
-            if args["category"] not in {"fact", "preference", "project", "temporary"}: raise ValueError("Invalid memory category")
+            if not self.settings["automatic_memory"] and not WRITE_REQUEST.search(self.value.message): raise ToolValidationError("Automatic memory is disabled")
+            if args["category"] not in {"fact", "preference", "project", "temporary"}: raise ToolValidationError("Invalid memory category")
             self.mutations.append({"action": "save", "key": key, "quote": quote, "category": args["category"]})
             return {"key": key, "content": quote, "saved": True, "commits_with_answer": True}
         if name.startswith("document_"):
-            if not self.attachments: raise ValueError("No files selected")
+            if not self.attachments: raise ToolValidationError("No files selected")
             if name == "document_search":
-                if not isinstance(args["query"], str) or not 1 <= len(args["query"]) <= 400: raise ValueError("Invalid document query")
+                if not isinstance(args["query"], str) or not 1 <= len(args["query"]) <= 400: raise ToolValidationError("Invalid document query")
                 excerpts = documents.retrieve(self.attachments, args["query"])
                 result = {"excerpts": excerpts, "coverage": "selected matching excerpts"}
             elif name == "document_overview":
@@ -163,9 +170,9 @@ class ToolSession:
                 excerpts = result["excerpts"]
             else:
                 attachment = next((a for a in self.attachments if a["id"] == args["attachment_id"]), None)
-                if attachment is None: raise ValueError("File is not selected in this conversation")
+                if attachment is None: raise ToolValidationError("File is not selected in this conversation")
                 pages = args["pages"]
-                if not isinstance(pages, list) or not 1 <= len(pages) <= 4 or any(type(p) is not int or not 1 <= p <= max(1, attachment["pages"]) for p in pages): raise ValueError("Select one to four valid pages")
+                if not isinstance(pages, list) or not 1 <= len(pages) <= 4 or any(type(p) is not int or not 1 <= p <= max(1, attachment["pages"]) for p in pages): raise ToolValidationError("Select one to four valid pages")
                 selected = {**attachment, "sections": [chunk for chunk in attachment["sections"] if (chunk["page"] or 1) in pages]}
                 result = documents.overview([selected], budget=8000)
                 excerpts = result["excerpts"]
@@ -176,22 +183,22 @@ class ToolSession:
         if name == "calculator": return calculate(args["expression"])
         if name in {"weather", "web_search"}:
             enabled = self.settings["weather_enabled" if name == "weather" else "search_enabled"]
-            if not enabled: raise ValueError("This external lookup is disabled")
+            if not enabled: raise ToolValidationError("This external lookup is disabled")
             field = "city" if name == "weather" else "query"
             text = args[field]
             if not isinstance(text, str) or not 1 <= len(text) <= 300 or text.casefold() not in self.value.message.casefold():
-                raise ValueError("External lookup input must be supplied in the current user request")
+                raise ToolValidationError("External lookup input must be supplied in the current user request")
             if name == "weather": self.weather_city = text
             response = await self.lookup.post("/" + ("weather" if name == "weather" else "search"), json={field: text})
             response.raise_for_status()
             result = response.json()
-            if not isinstance(result, dict): raise ValueError("Invalid lookup result")
+            if not isinstance(result, dict): raise ToolValidationError("Invalid lookup result")
             if name == "weather":
-                if not isinstance(result.get("current"), dict): raise ValueError("Invalid weather result")
+                if not isinstance(result.get("current"), dict): raise ToolValidationError("Invalid weather result")
                 self.weather_results.append({"city": text, "result": result})
             self.web_sources.extend(result.get("sources", []))
             return result
-        raise ValueError("Tool is not implemented")
+        raise ToolValidationError("Tool is not implemented")
 
     def commit(self, connection):
         for op in self.mutations:
@@ -243,10 +250,11 @@ def weather_reply(session, metadata):
     return '\n'.join(replies)
 
 
-def memory_reply(session):
+def memory_reply(session, metadata=None):
     """Ground explicit save acknowledgements and memory capability in server state."""
     text = session.value.message.strip()
-    if FOLLOWUP_SAVE.fullmatch(text):
+    memory_save_turn = (metadata or {}).get("route", {}).get("tool_family") == "memory" and any(event["name"] == "memory_save" for event in session.events)
+    if FOLLOWUP_SAVE.fullmatch(text) or memory_save_turn:
         saved = [op["quote"] for op in session.mutations if op["action"] == "save"]
         if saved:
             return "Saved: " + "; ".join(dict.fromkeys(saved)) + ". These facts will be available in future chats on this Keno server."

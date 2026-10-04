@@ -46,7 +46,7 @@ function toolActivity(output, events, committed=false) {
   output._activity.replaceChildren();const summary=document.createElement('summary');
   summary.textContent='Tools · '+events.length+(events.some(e=>e.status==='running')?' · Working':'');output._activity.append(summary);
   const labels={memory_search:'Search memories',memory_save:committed?'Save memory':'Prepare memory',memory_forget:committed?'Forget memory':'Prepare forgetting',document_search:'Search document',document_read:'Read pages',document_overview:'Review document text',calculator:'Calculate',weather:'Weather lookup',web_search:'Web search'};
-  for(const item of events) { const row=document.createElement('div');row.textContent=(labels[item.name]||item.name)+(item.memory_key?' · '+item.memory_key:'')+' · '+item.status;output._activity.append(row); }
+  for(const item of events) { const row=document.createElement('div');row.textContent=(labels[item.name]||item.name)+(item.memory_key?' · '+item.memory_key:'')+' · '+item.status+(item.detail?' — '+item.detail:'');output._activity.append(row); }
 }
 let previewUrl=null,previewGeneration=0;
 function closeSource() { previewGeneration++;$('sourceDialog').close();if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl=null; }

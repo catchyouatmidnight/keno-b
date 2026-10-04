@@ -24,7 +24,7 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import documents, routing, tools, history, agent
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 DB_PATH = Path(os.environ.get("KENO_DB", "data/keno.db"))
 API_KEY = os.environ.get("KENO_API_KEY", "")
 LLM_URL = os.environ.get("LLM_URL", "http://llm:8080").rstrip("/")
@@ -573,7 +573,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
             async for name, data in agent.plan(app.state.llm, LLM_MODEL, messages, definitions, session, metadata, check_tool_budget):
                 yield name, data
         guarded = tools.weather_reply(session, metadata)
-        memory_guarded = tools.memory_reply(session) if guarded is None else None
+        memory_guarded = tools.memory_reply(session, metadata) if guarded is None else None
         if memory_guarded is not None: guarded = memory_guarded
         if guarded is not None:
             answer, finished, reason = guarded, True, "stop"
