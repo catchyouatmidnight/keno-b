@@ -4,7 +4,7 @@ Backend version: 0.2.0.
 
 ## Completed in the development workspace
 
-- Sixteen integration cases pass with deterministic simulated Qwen and Laya services: fresh installation/auth, persistent profile after restart, corrected and expired memories across chats, SSE persistence and idempotent replay, failed/incomplete streams, retries, context limits, request-size limits, consistent backups, restart recovery, busy-slot handling, cancellation cleanup, opt-in CLI restoration, automatic quick/deep routing, low-confidence escalation, router failure cleanup, local PDF/DOCX extraction, conversation-scoped file references, image/page payloads, upload bounds, and backups containing attachments, and schema-1 backup migration preserving personal state.
+- Sixteen integration cases pass with deterministic simulated Qwen and Laya services: fresh installation/auth, persistent profile after restart, corrected and expired memories across chats, SSE persistence and idempotent replay, failed/incomplete streams, retries, context limits, request-size limits, consistent backups, restart recovery, busy-slot handling, cancellation cleanup, opt-in CLI restoration, automatic quick/deep routing, low-confidence quick/deep choices, router failure cleanup, local PDF/DOCX extraction, conversation-scoped file references, image/page payloads, upload bounds, and backups containing attachments, and schema-1 backup migration preserving personal state.
 - Python modules compile, browser JavaScript passes Node syntax checking, and shell scripts pass `bash -n`.
 - Compose YAML parses; model API has no published host port and backend, Qwen and Laya use only the internal network; only the gateway publishes a port.
 - OpenAPI schema and Postman collection parse as JSON.

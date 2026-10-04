@@ -281,7 +281,16 @@ def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
     assert 'Hello Zain' in decisions[-1]['state']['recent_conversation']
     main.app.state.laya = fake_router(confidence=0.55)
     uncertain = send(client, conversation, request_id='uncertain-analysis-001').json()
-    assert uncertain['context']['route']['thinking'] and uncertain['context']['route']['uncertain']
+    assert uncertain['context']['route']['thinking'] is False
+    assert uncertain['context']['route']['uncertain'] is True
+    assert uncertain['context']['thinking_budget'] == 0
+    uncertain_request = [payload for path, payload in calls if path == '/v1/chat/completions'][-1]
+    assert uncertain_request['chat_template_kwargs']['enable_thinking'] is False
+    assert uncertain_request['reasoning_budget_tokens'] == 0
+    main.app.state.laya = fake_router(thinking='deep', confidence=0.55)
+    uncertain_deep = send(client, conversation, request_id='uncertain-deep-001').json()
+    assert uncertain_deep['context']['route']['thinking'] is True
+    assert uncertain_deep['context']['thinking_budget'] == 384
     main.app.state.laya = fake_router(mode='offline')
     assert send(client, conversation, request_id='offline-router-001').status_code == 503
     assert not main.app.state.generation_lock.locked()

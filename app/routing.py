@@ -46,9 +46,9 @@ async def decide(client, message, history, attachments):
                 raise ValueError("Invalid routing confidence")
             decisions[key] = {"choice": choice, "confidence": round(confidence, 4)}
         uncertain = decisions["thinking"]["confidence"] < 0.65 or state["request_truncated"]
-        # Uncertain complexity gets deeper reasoning; unavailable Laya never silently
-        # turns into a keyword router or sends the request to a hosted provider.
-        thinking = uncertain or decisions["thinking"]["choice"] == "deep"
+        # Honor Laya's effort choice. Low confidence alone is not evidence that
+        # a quick request needs hidden reasoning. Keep uncertainty in metadata.
+        thinking = decisions["thinking"]["choice"] == "deep" or state["request_truncated"]
         vision = bool(attachments) and (decisions["source"]["choice"] == "vision" or
                  any(a["kind"] == "image" or not a["characters"] for a in attachments))
         return {"engine": "laya", "thinking": thinking, "vision": vision,
