@@ -11,6 +11,13 @@ MAX_CALLS = 4
 MAX_ROUNDS = 2
 WRITE_REQUEST = re.compile(r"\b(remember|save|forget|delete|remove|ingat|simpan|hapus|lupakan)\b", re.I)
 FORGET_REQUEST = re.compile(r"\b(forget|delete|remove|hapus|lupakan)\b", re.I)
+FOLLOWUP_SAVE = re.compile(r"^(?:please\s+)?(?:save|remember|simpan|ingat)(?:\s+(?:this|that|it|me|ini|itu|saya))?(?:\s+(?:please|for future chats))?[.!?]*$", re.I)
+
+
+class MemoryEvidenceError(ValueError):
+    pass
+
+
 NO_SAVE = re.compile(r"(?:don't|do not|never)\s+(?:save|remember)|jangan\s+(?:simpan|ingat)", re.I)
 
 
@@ -24,7 +31,7 @@ STRING = {"type": "string"}
 SPECS = {
     "memory_search": spec("memory_search", "Find saved facts and their keys. Use before correcting an unknown key.",
                           {"query": STRING}, ["query"]),
-    "memory_save": spec("memory_save", "Remember a lasting firsthand fact or preference stated by the user. quote must be copied verbatim from the latest user message, never a file or assistant answer. Reuse the existing key for corrections. Prefer user.name, user.location, user.preferred_language for those facts.",
+    "memory_save": spec("memory_save", "Remember a lasting firsthand fact or preference stated by the user. quote must be copied verbatim from the latest user message. For an explicit follow-up such as save or remember that, quote the relevant recent USER message instead. Never quote a file or assistant answer. Reuse the existing key for corrections. Prefer user.name, user.location, user.preferred_language for those facts.",
                         {"key": STRING, "quote": STRING, "category": {"type": "string", "enum": ["fact", "preference", "project", "temporary"]}}, ["key", "quote", "category"]),
     "memory_forget": spec("memory_forget", "Forget one saved fact only when the current user explicitly asks. quote is the user's verbatim deletion request.",
                           {"key": STRING, "quote": STRING}, ["key", "quote"]),
@@ -107,10 +114,19 @@ class ToolSession:
         ranked = sorted(rows.values(), key=lambda r: len(words & set(re.findall(r"\w+", (r["key"] + " " + r["content"]).casefold()))), reverse=True)
         return ranked[:8]
 
-    def quote(self, value):
-        if not isinstance(value, str) or not 1 <= len(value) <= 1000 or value not in self.value.message:
-            raise ValueError("Evidence must be a verbatim span of the current user message")
-        return value
+    def quote(self, value, followup=False):
+        if not isinstance(value, str) or not 1 <= len(value) <= 1000:
+            raise MemoryEvidenceError("Copy the user's exact fact as quote, using 1–1000 characters.")
+        is_followup = followup and bool(FOLLOWUP_SAVE.fullmatch(self.value.message.strip()))
+        candidates = [] if is_followup else [self.value.message]
+        if is_followup:
+            with self.db() as c:
+                candidates += [r[0] for r in c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 4", (self.value.conversation_id,)) if not NO_SAVE.search(r[0]) and not FOLLOWUP_SAVE.fullmatch(r[0].strip())]
+        for text in candidates:
+            match = re.search(re.escape(value), text, re.I)
+            if match:
+                return match.group(0)
+        raise MemoryEvidenceError("Copy the fact verbatim from a USER message, not an assistant answer. Earlier user messages are allowed only for an explicit follow-up such as save or remember that. Do not invent or paraphrase the quote.")
 
     async def execute(self, name, args):
         if name not in SPECS or not isinstance(args, dict):
@@ -125,7 +141,7 @@ class ToolSession:
         if name in {"memory_save", "memory_forget"}:
             key = args["key"]
             if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,100}", key): raise ValueError("Invalid memory key")
-            quote = self.quote(args["quote"])
+            quote = self.quote(args["quote"], followup=name == "memory_save")
             if name == "memory_save" and NO_SAVE.search(self.value.message): raise ValueError("The user requested no memory saving")
             if name == "memory_forget":
                 if not FORGET_REQUEST.search(self.value.message): raise ValueError("Forgetting requires an explicit current-user request")
@@ -225,3 +241,17 @@ def weather_reply(session, metadata):
         reply += " Source: Open-Meteo. Model-based weather estimate."
         replies.append(reply)
     return '\n'.join(replies)
+
+
+def memory_reply(session):
+    """Ground explicit save acknowledgements and memory capability in server state."""
+    text = session.value.message.strip()
+    if FOLLOWUP_SAVE.fullmatch(text):
+        saved = [op["quote"] for op in session.mutations if op["action"] == "save"]
+        if saved:
+            return "Saved: " + "; ".join(dict.fromkeys(saved)) + ". These facts will be available in future chats on this Keno server."
+        return "I couldn't save a fact. Please repeat the detail you want me to remember. It hasn't been saved for future chats."
+    if len(text) <= 200 and re.search(r"\b(?:can|will|do)\s+(?:you|u)\s+(?:remember|have memory)\b", text, re.I) and re.search(r"\b(me|chats?|conversations?|memory)\b", text, re.I):
+        mode = "Automatic memory is enabled." if session.settings['automatic_memory'] else "Automatic memory is off; ask me explicitly to save a fact."
+        return "Yes. Facts saved in Memories persist across chats on this Keno server. " + mode + " You can review, edit or delete them in Memories. This does not mean I retain every detail from every chat."
+    return None

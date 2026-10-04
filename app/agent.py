@@ -53,8 +53,9 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                 result = await session.execute(name, args)
                 status = "complete"
                 may_continue |= name in {"memory_search", "document_search"}
-            except (ValueError, TypeError, KeyError, SyntaxError, ArithmeticError, httpx.HTTPError):
-                result = {"error": "Tool failed validation or is unavailable. Do not claim it succeeded. Ask for missing details or retry with valid arguments."}
+            except (ValueError, TypeError, KeyError, SyntaxError, ArithmeticError, httpx.HTTPError) as error:
+                detail = str(error) if isinstance(error, tools.MemoryEvidenceError) else "Tool failed validation or is unavailable. Do not claim it succeeded. Ask for missing details or retry with valid arguments."
+                result = {"error": detail}
                 status = "failed"
                 may_continue = True
             result_event = {**event, "status": status}

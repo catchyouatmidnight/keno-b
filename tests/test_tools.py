@@ -234,3 +234,50 @@ def test_weather_success_uses_returned_data_and_outage_is_honest(client):
     main.app.state.llm=fake_model()
     conceptual=send(client,new_conversation(client),request_id='weather-concept-001',message='Explain how weather forecasting works').json()
     assert conceptual['reply']=='Hello Zain' and 'answer_source' not in conceptual['context']
+
+
+def test_followup_save_uses_recent_user_fact_and_survives_new_chat(client):
+    conversation=new_conversation(client)
+    main.app.state.laya=fake_router(family='none')
+    main.app.state.llm=fake_model()
+    assert send(client,conversation,message='hello im zain, your creator').status_code==200
+    capability=send(client,conversation,request_id='capability-001',message='can u remember me for any chats?').json()
+    assert 'persist across chats' in capability['reply'] and 'Automatic memory is enabled' in capability['reply']
+    main.app.state.laya=fake_router(family='memory')
+    main.app.state.llm=native_model([[('memory_save',{'key':'user.name','quote':'Zain','category':'fact'})]])
+    saved=send(client,conversation,request_id='followup-save-001',message='save').json()
+    assert saved['reply'].startswith('Saved: zain.') and saved['context']['answer_source']=='memory_guard'
+    assert client.get('/api/v1/memories').json()[0]['content']=='zain'
+    main.app.state.laya=fake_router(family='none')
+    seen=[];main.app.state.llm=fake_model(seen=seen)
+    result=send(client,new_conversation(client),request_id='followup-new-chat-001',message='Do you know my name?').json()
+    assert 'user.name' in result['context']['memory_keys']
+    assert 'zain' in seen[-1][0]['content']
+
+
+def test_followup_save_rejects_assistant_only_other_chat_and_no_save_evidence(client):
+    foreign=new_conversation(client)
+    main.app.state.llm=fake_model()
+    send(client,foreign,message='Foreign secret fact')
+    for index,(previous,quote) in enumerate((('Hi','Hello Zain'),('Hi','Foreign secret fact'),("Don't remember my name Zain",'Zain'))):
+        main.app.state.laya=fake_router(family='none');main.app.state.llm=fake_model()
+        conversation=new_conversation(client)
+        send(client,conversation,request_id=f'past-evidence-{index}',message=previous)
+        main.app.state.laya=fake_router(family='memory')
+        main.app.state.llm=native_model([[('memory_save',{'key':'user.name','quote':quote,'category':'fact'})]])
+        response=send(client,conversation,request_id=f'rejected-save-{index}',message='save').json()
+        assert response['reply'].startswith("I couldn't save a fact.")
+        assert "hasn't been saved" in response['reply']
+        assert all(t['status']=='failed' for t in response['context']['tool_calls'])
+    assert client.get('/api/v1/memories').json()==[]
+
+
+def test_memory_capability_reports_real_settings_and_identity_prompt(client):
+    main.app.state.laya=fake_router(family='none');main.app.state.llm=fake_model()
+    client.put('/api/v1/tools/settings',json={'automatic_memory':False})
+    response=send(client,new_conversation(client),message='can you remember me in future chats?').json()
+    assert 'persist across chats' in response['reply'] and 'Automatic memory is off' in response['reply']
+    prompt=main.system_prompt([])
+    assert 'persistent SQLite memory across chats' in prompt
+    assert 'explicit save requests still work' in prompt and 'creator of this Keno app' in prompt
+    assert client.get('/api/v1/status').json()['version']=='0.3.1'
