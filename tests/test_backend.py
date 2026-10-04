@@ -297,7 +297,11 @@ def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
     main.app.state.laya = fake_router(thinking='deep', confidence=0.55)
     uncertain_deep = send(client, conversation, request_id='uncertain-deep-001').json()
     assert uncertain_deep['context']['route']['thinking'] is True
-    assert uncertain_deep['context']['thinking_budget'] == 384
+    assert uncertain_deep['context']['thinking_budget'] == 96
+    uncertain_deep_request = [payload for path, payload in calls if path == '/v1/chat/completions'][-1]
+    assert uncertain_deep_request['chat_template_kwargs']['enable_thinking'] is True
+    assert uncertain_deep_request['reasoning_budget_tokens'] == 96
+    assert uncertain_deep_request['max_tokens'] == 608
     main.app.state.llm = fake_model('no_reasoning')
     main.app.state.laya = fake_router()
     plain = send(client, conversation, request_id='no-reasoning-001').json()

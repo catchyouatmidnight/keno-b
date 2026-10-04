@@ -2,6 +2,8 @@
 
 Backend version: 0.2.0.
 
+Thinking-budget regression: quick choices reserve/send 0 tokens, uncertain deep choices reserve/send 96, and confident deep choices reserve/send 384. Tested against the simulated model; actual latency and answer quality require deployment evaluation.
+
 ## Completed in the development workspace
 
 - Sixteen integration cases pass with deterministic simulated Qwen and Laya services: fresh installation/auth, persistent profile after restart, corrected and expired memories across chats, SSE persistence and idempotent replay, failed/incomplete streams, retries, context limits, request-size limits, consistent backups, restart recovery, busy-slot handling, cancellation cleanup, opt-in CLI restoration, automatic quick/deep routing, low-confidence quick/deep choices, single-question plain-chat routing without assistant-output contamination, hidden-reasoning timing without storing its contents, router failure cleanup, local PDF/DOCX extraction, conversation-scoped file references, image/page payloads, upload bounds, and backups containing attachments, and schema-1 backup migration preserving personal state.

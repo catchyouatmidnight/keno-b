@@ -32,6 +32,7 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "Qwen3.5-2B-Q4_K_M.gguf")
 LAYA_URL = os.environ.get("LAYA_URL", "http://laya:8000").rstrip("/")
 VISION_ENABLED = os.environ.get("VISION_ENABLED", "false").lower() == "true"
 THINKING_BUDGET = 384
+UNCERTAIN_THINKING_BUDGET = 96
 IMAGE_TOKEN_LIMIT = 1024
 CONTEXT_SIZE = int(os.environ.get("CONTEXT_SIZE", "8192"))
 STATIC = Path(__file__).parent / "static"
@@ -412,6 +413,8 @@ async def fit_context(value, route=None, attachments=None):
     if images and not VISION_ENABLED:
         raise HTTPException(422, "This request needs vision; install the matching projector first")
     thinking_tokens = THINKING_BUDGET if route["thinking"] else 0
+    if route["thinking"] and route.get("uncertain"):
+        thinking_tokens = UNCERTAIN_THINKING_BUDGET
     image_reserve = len(images) * (IMAGE_TOKEN_LIMIT + 64)
     selected = select_memories(value.message)
     with db() as c:
