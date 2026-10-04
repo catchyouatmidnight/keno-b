@@ -20,10 +20,12 @@ for index, (raw,) in enumerate(rows, 1):
     route = data.get("route", {})
     output = {"recent_response": index,
               "laya_seconds": route.get("seconds"),
+              "laya_question_count": route.get("question_count"),
               "thinking": route.get("thinking"),
               "thinking_decision": route.get("decisions", {}).get("thinking"),
               "uncertain": route.get("uncertain")}
-    for key in ("context_prepare_seconds", "model_first_token_seconds",
+    for key in ("context_prepare_seconds", "model_first_delta_seconds",
+                "model_first_reasoning_seconds", "hidden_reasoning_seconds", "model_first_token_seconds",
                 "first_token_seconds", "total_seconds", "elapsed_seconds",
                 "prompt_tokens", "history_turns", "thinking_budget", "finish_reason"):
         output[key] = data.get(key)

@@ -6,7 +6,7 @@ import httpx
 from fastapi import HTTPException
 
 QUESTIONS = {
-    "thinking": {"type": "choice", "instructions": "Choose the effort needed to answer the latest user request accurately.",
+    "thinking": {"type": "choice", "instructions": "Choose effort for latest_request only. Earlier requests are context for follow-ups, not tasks to repeat. A greeting after a complex task is still quick.",
                  "criteria": {"quick": "greeting, casual chat, straightforward fact, simple extraction or brief summary",
                               "deep": "multi-step reasoning, calculations, comparing evidence, contradictions, complex analysis or planning"}},
     "source": {"type": "choice", "instructions": "Choose the evidence needed for the latest request, considering available attachments.",
@@ -21,10 +21,13 @@ QUESTIONS = {
 async def decide(client, message, history, attachments):
     start = time.monotonic()
     state = {"latest_request": message[:2400], "request_truncated": len(message) > 2400,
-             "recent_conversation": history[-1600:],
+             "earlier_user_requests": history[-600:],
              "attachments": [{k: a[k] for k in ("id", "name", "kind", "pages", "characters")} for a in attachments]}
+    # With no attached evidence, only the effort decision requires inference.
+    # Laya still decides quick/deep for every request; this is not a keyword router.
+    questions = QUESTIONS if attachments else {"thinking": QUESTIONS["thinking"]}
     try:
-        response = await client.post("/v1/systemone", json={"state": state, "questions": QUESTIONS,
+        response = await client.post("/v1/systemone", json={"state": state, "questions": questions,
                                     "model": "multilingual", "max_len": 1024, "head_max_len": 256})
         response.raise_for_status()
         result = response.json()
@@ -32,6 +35,8 @@ async def decide(client, message, history, attachments):
         decisions = {}
         for key, options in (("thinking", {"quick", "deep"}), ("source", {"text", "vision"}),
                              ("document_scope", {"overview", "focused"})):
+            if key not in questions:
+                continue
             answer = answers[key]
             choice = answer["choice"]
             if choice not in options:
@@ -52,7 +57,8 @@ async def decide(client, message, history, attachments):
         vision = bool(attachments) and (decisions["source"]["choice"] == "vision" or
                  any(a["kind"] == "image" or not a["characters"] for a in attachments))
         return {"engine": "laya", "thinking": thinking, "vision": vision,
-                "document_scope": decisions["document_scope"]["choice"],
+                "document_scope": decisions["document_scope"]["choice"] if attachments else "focused",
+                "question_count": len(questions),
                 "uncertain": uncertain, "decisions": decisions,
                 "seconds": round(time.monotonic() - start, 3)}
     except (httpx.HTTPError, ValueError, KeyError, TypeError):

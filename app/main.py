@@ -463,6 +463,8 @@ async def generate(value, messages, metadata, request_started=None):
     start = time.monotonic()
     request_started = start if request_started is None else request_started
     first_token = False
+    first_delta = None
+    first_reasoning = None
     try:
         payload = {"model": LLM_MODEL, "messages": messages, "stream": True,
                    "temperature": 0.6, "max_tokens": value.max_tokens + metadata.get("thinking_budget", 0),
@@ -481,13 +483,24 @@ async def generate(value, messages, metadata, request_started=None):
                 if "error" in data:
                     raise ValueError("Model returned an error")
                 for choice in data.get("choices", []):
-                    delta = choice.get("delta", {}).get("content") or ""
+                    fields = choice.get("delta", {})
+                    delta = fields.get("content") or ""
+                    has_reasoning = bool(fields.get("reasoning_content"))
+                    if delta or has_reasoning:
+                        observed = time.monotonic()
+                        if first_delta is None:
+                            first_delta = observed
+                            metadata["model_first_delta_seconds"] = round(observed - start, 3)
+                        if has_reasoning and first_reasoning is None:
+                            first_reasoning = observed
+                            metadata["model_first_reasoning_seconds"] = round(observed - start, 3)
                     if delta:
                         if not first_token:
                             first_token = True
                             token_time = time.monotonic()
                             metadata["first_token_seconds"] = round(token_time - request_started, 3)
                             metadata["model_first_token_seconds"] = round(token_time - start, 3)
+                            metadata["hidden_reasoning_seconds"] = round(token_time - first_reasoning, 3) if first_reasoning is not None else 0
                             yield "timing", {"first_token_seconds": metadata["first_token_seconds"],
                                              "model_first_token_seconds": metadata["model_first_token_seconds"]}
                         answer += delta
@@ -538,8 +551,8 @@ async def chat(value: ChatInput):
         prepare_started = time.monotonic()
         attachments = attachment_rows(value.conversation_id, value.attachment_ids)
         with db() as c:
-            prior = c.execute("SELECT user_text,assistant_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY created_at DESC LIMIT 2", (value.conversation_id,)).fetchall()
-        history = "\n".join(str(t[0]) + "\n" + str(t[1]) for t in reversed(prior))
+            prior = c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY created_at DESC LIMIT 2", (value.conversation_id,)).fetchall()
+        history = "\n".join(str(t[0])[:300] for t in reversed(prior))
         route = await routing.decide(app.state.laya, value.message, history, attachments)
         messages, metadata = await fit_context(value, route, attachments)
         metadata["context_prepare_seconds"] = round(time.monotonic() - prepare_started, 3)

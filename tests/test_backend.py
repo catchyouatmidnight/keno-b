@@ -31,7 +31,8 @@ def fake_router(thinking="quick", source="text", confidence=0.9, mode="ok", seen
         answers = {"thinking": {"choice": thinking, "answer_confidence": confidence},
                    "source": {"choice": source, "answer_confidence": confidence},
                    "document_scope": {"choice": scope, "answer_confidence": confidence}}
-        return httpx.Response(200, json={"answers": answers})
+        requested = json.loads(request.content)['questions']
+        return httpx.Response(200, json={"answers": {key: answers[key] for key in requested}})
     return httpx.AsyncClient(base_url="http://laya:8000", transport=httpx.MockTransport(handler))
 
 
@@ -54,7 +55,7 @@ def fake_model(mode="ok", seen=None, calls=None):
             if mode == "failure":
                 return httpx.Response(500, json={"error": "failed"})
             chunks = ["Hello ", "Zain"]
-            body = 'data: ' + json.dumps({"choices": [{"delta": {"reasoning_content": "Private reasoning must not become the answer"}, "finish_reason": None}]}) + '\n\n'
+            body = '' if mode == 'no_reasoning' else 'data: ' + json.dumps({"choices": [{"delta": {"reasoning_content": "Private reasoning must not become the answer"}, "finish_reason": None}]}) + '\n\n'
             body += "".join('data: ' + json.dumps({"choices": [{"delta": {"content": chunk}, "finish_reason": None}]}) + '\n\n' for chunk in chunks)
             if mode != "interrupted":
                 body += 'data: ' + json.dumps({"choices": [{"delta": {}, "finish_reason": "length" if mode == "length" else "stop"}]}) + '\n\ndata: [DONE]\n\n'
@@ -278,7 +279,13 @@ def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
     assert requests[1]['max_tokens'] == 896
     assert requests[1]['reasoning_budget_tokens'] == 384
     assert requests[1]['reasoning_format'] == 'deepseek'
-    assert 'Hello Zain' in decisions[-1]['state']['recent_conversation']
+    assert 'Hi' in decisions[-1]['state']['earlier_user_requests']
+    assert 'Hello Zain' not in decisions[-1]['state']['earlier_user_requests']
+    assert list(decisions[-1]['questions']) == ['thinking']
+    assert quick['context']['route']['question_count'] == 1
+    assert quick['context']['model_first_delta_seconds'] <= quick['context']['model_first_token_seconds']
+    assert quick['context']['model_first_reasoning_seconds'] >= 0
+    assert quick['context']['hidden_reasoning_seconds'] >= 0
     main.app.state.laya = fake_router(confidence=0.55)
     uncertain = send(client, conversation, request_id='uncertain-analysis-001').json()
     assert uncertain['context']['route']['thinking'] is False
@@ -291,6 +298,11 @@ def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
     uncertain_deep = send(client, conversation, request_id='uncertain-deep-001').json()
     assert uncertain_deep['context']['route']['thinking'] is True
     assert uncertain_deep['context']['thinking_budget'] == 384
+    main.app.state.llm = fake_model('no_reasoning')
+    main.app.state.laya = fake_router()
+    plain = send(client, conversation, request_id='no-reasoning-001').json()
+    assert plain['context']['hidden_reasoning_seconds'] == 0
+    assert 'model_first_reasoning_seconds' not in plain['context']
     main.app.state.laya = fake_router(mode='offline')
     assert send(client, conversation, request_id='offline-router-001').status_code == 503
     assert not main.app.state.generation_lock.locked()
@@ -338,6 +350,8 @@ def test_vision_is_local_bounded_and_selected_by_laya(client, monkeypatch):
     assert response.status_code == 200
     context = response.json()['context']
     assert context['visual_sources'][0]['page'] == 2
+    assert context['route']['question_count'] == 3
+    assert set(context['route']['decisions']) == {'thinking', 'source', 'document_scope'}
     payload = [p for path, p in calls if path == '/v1/chat/completions'][-1]
     parts = payload['messages'][-1]['content']
     assert parts[1]['image_url']['url'].startswith('data:image/jpeg;base64,')
