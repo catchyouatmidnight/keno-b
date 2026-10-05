@@ -98,5 +98,5 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                 message["content"] = session.value.message
             elif isinstance(content, list) and content and content[0].get("type") == "text" and content[0]["text"].startswith(session.value.message + "\n\nSelected uploaded-file"):
                 content[0]["text"] = session.value.message
-    messages[0]["content"] += "\nTool phase is complete. Answer the user's request using successful results. Do not request more tools."
+    messages.append({"role": "system", "content": "Tool phase is complete. Answer the user's request using successful results. Do not request more tools."})
     await check_budget(messages, metadata, [])

@@ -81,7 +81,7 @@ def test_native_memory_save_correct_forget_and_idempotent_replay(client):
     main.app.state.laya = fake_router()
     main.app.state.llm = fake_model(seen=seen)
     assert send(client, new_conversation(client), request_id='new-chat-name-001').status_code == 200
-    assert "I'm Roy" in seen[-1][0]['content']
+    assert "I'm Roy" in "\n".join(m["content"] for m in seen[-1] if isinstance(m["content"], str))
     main.app.state.laya = fake_router(family='memory')
     main.app.state.llm = native_model([[('memory_forget', {'key':'user.name', 'quote':'forget my name'})]])
     assert send(client, conversation, request_id='forget-name-001', message='forget my name').status_code == 200
@@ -297,7 +297,7 @@ def test_followup_save_uses_recent_user_fact_and_survives_new_chat(client):
     seen=[];main.app.state.llm=fake_model(seen=seen)
     result=send(client,new_conversation(client),request_id='followup-new-chat-001',message='Do you know my name?').json()
     assert 'user.name' in result['context']['memory_keys']
-    assert 'zain' in seen[-1][0]['content']
+    assert 'zain' in "\n".join(m["content"] for m in seen[-1] if isinstance(m["content"], str))
 
 
 def test_followup_save_rejects_assistant_only_other_chat_and_no_save_evidence(client):
@@ -340,3 +340,54 @@ def test_memory_quote_accepts_spacing_but_preserves_source_and_rejects_paraphras
     assert bad['context']['tool_calls'][0]['status']=='failed'
     assert 'Do not invent or paraphrase' in bad['context']['tool_calls'][0]['detail']
     assert client.get('/api/v1/memories').json()[0]['content']=='the fact that im  your creator'
+
+
+def test_user_name_answer_is_grounded_and_not_assistant_identity(client):
+    main.app.state.laya = fake_router(family='memory')
+    main.app.state.llm = native_model(['I am Amira.'])
+    conversation = new_conversation(client)
+    result = send(client, conversation, message='My name is Amira. What is my name?').json()
+    assert result['reply'] == 'Your name is Amira.'
+    assert result['context']['answer_source'] == 'user_name_guard'
+    assert client.get('/api/v1/memories').json() == []
+    main.app.state.laya = fake_router(family='none')
+    main.app.state.llm = fake_model()
+    followup = send(client, conversation, request_id='name-followup-001', message='What is my name?').json()
+    assert followup['reply'] == 'Your name is Amira.'
+    fresh = send(client, new_conversation(client), request_id='name-fresh-001', message='What is my name?').json()
+    assert fresh['context'].get('answer_source') != 'user_name_guard'
+    client.put('/api/v1/memories/user.name', json={'key':'user.name', 'content':'My name is Budi.'})
+    saved = send(client, new_conversation(client), request_id='name-saved-001', message='What is my name?').json()
+    assert saved['reply'] == 'Your name is Budi.'
+    value = main.ChatInput(conversation_id=conversation, message='What is my name? Also calculate 2+2.', request_id='mixed-name-001')
+    assert main.user_name_reply(value, [], []) is None
+    value.message = 'My name is Amira. What is my name?'
+    assert main.user_name_reply(value, [], [{'name':'untrusted.txt'}]) is None
+
+
+def test_changing_retrieval_preserves_instruction_and_history_prefix(client):
+    main.app.state.laya = fake_router(family='none')
+    seen=[];main.app.state.llm = fake_model(seen=seen)
+    conversation = new_conversation(client)
+    send(client, conversation, message='Hello')
+    client.put('/api/v1/memories/preference', json={'key':'preference', 'content':'Prefer short replies', 'pinned':True})
+    send(client, conversation, request_id='prefix-second-001', message='Another question')
+    first, second = seen[0], seen[-1]
+    assert first[0] == second[0]
+    assert second[1]['role'] == 'user' and second[1]['content'] == 'Hello'
+    assert second[2]['role'] == 'assistant'
+    assert second[3]['role'] == 'system' and 'Prefer short replies' in second[3]['content']
+    assert 'Prefer short replies' not in second[0]['content']
+
+
+def test_tool_completion_does_not_rewrite_system_prefix(client):
+    requests=[]
+    main.app.state.laya = fake_router(family='calculator')
+    main.app.state.llm = native_model([[('calculator', {'expression':'2+2'})]], requests=requests)
+    response = send(client, new_conversation(client), message='Calculate 2+2').json()
+    assert response['context']['tool_calls'][0]['status'] == 'complete'
+    payloads=[body for path,body in requests if path == '/v1/chat/completions']
+    assert len(payloads) == 2
+    assert payloads[0]['messages'][0] == payloads[1]['messages'][0]
+    assert payloads[1]['messages'][-1]['role'] == 'system'
+    assert 'Tool phase is complete' in payloads[1]['messages'][-1]['content']

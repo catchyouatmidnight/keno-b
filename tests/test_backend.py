@@ -20,7 +20,7 @@ def test_explicit_save_without_tool_cannot_claim_persistence(client):
     assert not any(path == '/v1/chat/completions' for path, _ in calls)
 
 
-def test_conversation_prompt_separates_roles_and_omits_unavailable_tool_guidance(client):
+def test_conversation_prompt_separates_roles_and_keeps_tool_guidance_stable(client):
     client.put('/api/v1/profile', json={'name': 'Zain'})
     seen = []
     main.app.state.llm = fake_model(seen=seen)
@@ -29,8 +29,7 @@ def test_conversation_prompt_separates_roles_and_omits_unavailable_tool_guidance
     prompt = seen[-1][0]['content']
     assert 'Keno, the ASSISTANT' in prompt and 'The USER is a different person' in prompt
     assert 'Zain' in prompt
-    assert 'use document_overview' not in prompt
-    assert 'Use calculator for arithmetic' not in prompt
+    assert main.system_prompt([], available_tools=['memory_save']) == main.system_prompt([], available_tools=['calculator'])
 
 
 @pytest.fixture
@@ -120,7 +119,7 @@ def test_memory_correction_expiry_and_cross_chat(client):
         response = send(client, new_conversation(client), request_id=f"cross-chat-{index}")
         assert response.status_code == 200
         assert response.json()["context"]["memory_keys"] == ["language"]
-    prompt = seen[-1][0]["content"]
+    prompt = "\n".join(m["content"] for m in seen[-1] if isinstance(m["content"], str))
     assert "Indonesian" in prompt and "English" not in prompt and "Expired" not in prompt
     client.delete("/api/v1/memories/language")
     assert client.get("/api/v1/memories").json() == []
