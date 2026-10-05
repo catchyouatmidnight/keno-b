@@ -344,12 +344,16 @@ def test_memory_quote_accepts_spacing_but_preserves_source_and_rejects_paraphras
 
 
 def test_user_name_answer_is_grounded_and_not_assistant_identity(client):
+    requests = []
     main.app.state.laya = fake_router(family='memory')
-    main.app.state.llm = native_model(['I am Amira.'])
+    main.app.state.llm = native_model(['I am Amira.'], requests=requests)
     conversation = new_conversation(client)
     result = send(client, conversation, message='My name is Amira. What is my name?').json()
     assert result['reply'] == 'Your name is Amira.'
     assert result['context']['answer_source'] == 'user_name_guard'
+    assert result['context']['tool_planning_rounds'] == 0
+    assert result['context']['tool_model_seconds'] == 0
+    assert not any(path == '/v1/chat/completions' for path, body in requests)
     assert client.get('/api/v1/memories').json() == []
     main.app.state.laya = fake_router(family='none')
     main.app.state.llm = fake_model()
@@ -358,8 +362,14 @@ def test_user_name_answer_is_grounded_and_not_assistant_identity(client):
     fresh = send(client, new_conversation(client), request_id='name-fresh-001', message='What is my name?').json()
     assert fresh['context'].get('answer_source') != 'user_name_guard'
     client.put('/api/v1/memories/user.name', json={'key':'user.name', 'content':'My name is Budi.'})
+    requests.clear()
+    main.app.state.laya = fake_router(family='memory', thinking='deep')
+    main.app.state.llm = native_model([], requests=requests)
     saved = send(client, new_conversation(client), request_id='name-saved-001', message='What is my name?').json()
     assert saved['reply'] == 'Your name is Budi.'
+    assert saved['context']['tool_planning_mode'] == 'user_name_guard'
+    assert saved['context']['tool_calls'] == []
+    assert not any(path == '/v1/chat/completions' for path, body in requests)
     value = main.ChatInput(conversation_id=conversation, message='What is my name? Also calculate 2+2.', request_id='mixed-name-001')
     assert main.user_name_reply(value, [], []) is None
     value.message = 'My name is Amira. What is my name?'

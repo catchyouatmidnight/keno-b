@@ -623,14 +623,22 @@ async def generate(value, messages, metadata, request_started=None, attachments=
     try:
         metadata["max_tokens"] = value.max_tokens
         definitions = [tools.SPECS[name] for name in metadata.get("available_tools", [])]
-        if definitions:
+        # This read-only answer uses verified user evidence/server state. Do not
+        # ask a model to plan tools before returning an already-known name.
+        name_guarded = user_name_reply(value, messages, attachments)
+        if name_guarded is not None:
+            metadata.update(tool_seconds=0.0, tool_model_seconds=0.0,
+                            tool_execution_seconds=0.0, tool_planning_rounds=0,
+                            tool_planning_mode="user_name_guard", tool_save_required=False,
+                            tool_calls=[], memory_changes=[])
+        elif definitions:
             async for name, data in agent.plan(app.state.llm, LLM_MODEL, messages, definitions, session, metadata, check_tool_budget):
                 yield name, data
         planner_reply = metadata.pop("_planner_reply", None)
         guarded = tools.weather_reply(session, metadata)
         memory_guarded = tools.memory_reply(session, metadata) if guarded is None else None
         if memory_guarded is not None: guarded = memory_guarded
-        name_guarded = user_name_reply(value, messages, attachments) if guarded is None else None
+        if guarded is not None: name_guarded = None
         if name_guarded is not None: guarded = name_guarded
         if guarded is not None:
             answer, finished, reason = guarded, True, "stop"
