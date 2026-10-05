@@ -86,7 +86,9 @@ def test_native_memory_save_correct_forget_and_idempotent_replay(client):
     seen=[]
     main.app.state.laya = fake_router()
     main.app.state.llm = fake_model(seen=seen)
-    assert send(client, new_conversation(client), request_id='new-chat-name-001').status_code == 200
+    recalled = send(client, new_conversation(client), request_id='new-chat-name-001', message='What is my name?')
+    assert recalled.status_code == 200
+    assert recalled.json()['reply'] == 'Your name is Roy.'
     assert "I'm Roy" in "\n".join(m["content"] for m in seen[-1] if isinstance(m["content"], str))
     main.app.state.laya = fake_router(family='memory')
     main.app.state.llm = native_model([[('memory_forget', {'key':'user.name', 'quote':'forget my name'})]])
@@ -507,3 +509,28 @@ def test_action_gate_keeps_calculator_available(client):
     response = send(client, new_conversation(client), message='Calculate 17 times 23').json()
     assert response['context']['route']['tool_policy'] == 'action_route'
     assert response['context']['tool_calls'][0]['status'] == 'complete'
+
+
+def test_name_is_relevant_only_and_bad_preamble_not_replayed(client):
+    main.app.state.laya = fake_router(family='none')
+    client.put('/api/v1/memories/user.name', json={'key':'user.name', 'content':'my name is Zain', 'pinned':True})
+    seen=[]
+    main.app.state.llm = native_model(['Your name is Zain. Old device advice.'], seen=seen)
+    # Seed the old response as it existed before this fix, without modifying it.
+    conversation=new_conversation(client)
+    with main.db() as connection:
+        connection.execute('INSERT INTO turns (request_id,conversation_id,user_text,assistant_text,status,metadata,created_at) VALUES (?,?,?,?,?,?,?)',
+                           ('old-preamble-001',conversation,'how can i change theme in samsung a36 device',
+                            'Your name is Zain. Old device advice.','complete','{}',main.now()))
+    response=send(client,conversation,message='how can i change theme in samsung a36 device').json()
+    assert 'user.name' not in response['context']['memory_keys']
+    messages=seen[-1]
+    assert messages[2]['content'] == 'Old device advice.'
+    assert 'Your name is' not in messages[0]['content']
+    assert 'my name is Zain' not in messages[-1]['content']
+    with main.db() as connection:
+        assert connection.execute("SELECT assistant_text FROM turns WHERE request_id='old-preamble-001'").fetchone()[0] == 'Your name is Zain. Old device advice.'
+    assert client.get('/api/v1/memories').json()[0]['content'] == 'my name is Zain'
+    recalled=send(client,new_conversation(client),request_id='relevance-recall-001',message='What is my name?').json()
+    assert recalled['reply'] == 'Your name is Zain.'
+    assert main.history_answer_for_prompt('What is my name?', 'Your name is Zain. You told me earlier.') == 'Your name is Zain. You told me earlier.'

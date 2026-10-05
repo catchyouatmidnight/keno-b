@@ -424,12 +424,22 @@ async def delete_attachment(attachment_id: str):
 
 
 def select_memories(message):
-    words = set(re.findall(r"\w+", message.casefold()))
+    words = set(re.findall(r"\w+", message.casefold())) - documents.QUERY_STOP_WORDS
     candidates = memories(q="", limit=500)
     def score(m):
         return len(words & set(re.findall(r"\w+", (m["key"] + " " + m["content"]).casefold())))
     ranked = sorted(candidates, key=lambda m: (bool(m["pinned"]), score(m)), reverse=True)
-    return [m for m in ranked if m["pinned"] or score(m) > 0][:8]
+    # Names are pinned for durable identity, not to decorate every answer.
+    # Keep always-applicable pinned preferences, but retrieve names by relevance.
+    return [m for m in ranked if (m["pinned"] and m["key"] != "user.name") or score(m) > 0][:8]
+
+
+def history_answer_for_prompt(user_text, answer):
+    """Drop a misplaced name preamble from model context, never stored history."""
+    if re.search(r"\b(?:name|nama)\b", user_text, re.I):
+        return answer
+    match = re.match(r"^Your name is [^.!?\n]{1,80}[.!]\s+(?=\S)", answer or '', re.I)
+    return answer[match.end():] if match else answer
 
 
 def system_prompt(selected, has_uploads=False, available_tools=None):
@@ -444,7 +454,7 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
     ]
     return (f"You are {identity['name']}, the ASSISTANT. {identity['personality']}\n"
             "The USER is a different person. In user messages, 'I' and 'my' refer to the USER, not you. "
-            "Answer user-name questions as 'Your name is …', using user evidence; admit when unknown. "
+            "Use user evidence for identity questions; admit when unknown. "
             "Answer the latest question concisely; admit uncertainty. "
             "Use profile and saved memories only when relevant to the current question. Never preface unrelated answers with the user's name or personal facts. "
             "For device instructions, do not invent exact menu labels or paths; if unsure, say so and ask for the software version or a screenshot. "
@@ -485,7 +495,8 @@ async def fit_context(value, route=None, attachments=None):
     while True:
         messages = [{"role": "system", "content": system_prompt(selected, bool(attachments), [d['function']['name'] for d in definitions])}]
         for turn in recent:
-            messages.extend([{"role": "user", "content": turn[0]}, {"role": "assistant", "content": turn[1]}])
+            messages.extend([{"role": "user", "content": turn[0]},
+                             {"role": "assistant", "content": history_answer_for_prompt(turn[0], turn[1])}])
         # Changing retrieval belongs after the stable instructions and history,
         # so it does not invalidate their cached prefix on every new question.
         reference = {}
