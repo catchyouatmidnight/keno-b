@@ -462,7 +462,7 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
             "For device instructions, do not invent exact menu labels or paths; if unsure, say so and ask for the software version or a screenshot. "
             "Use natural language unless JSON is requested. Never invent weather or tool success. "
             "Distinguish supplied evidence from your own knowledge. Exact device menu paths and current facts need verification; if no source is available, label uncertainty instead of presenting a guess as verified. "
-            "For short follow-ups, resolve the subject from the immediately preceding exchange; do not repeat a different earlier task. "
+            "For short follow-ups, resolve the subject from the immediately preceding exchange; do not repeat a different earlier task. Supplied earlier messages are accessible conversation history; do not deny access to them. "
             f"Keno has persistent SQLite memory across chats/restarts on this server. Automatic memory is {'enabled' if tool_settings['automatic_memory'] else 'off; explicit save requests still work'}. "
             "Only successful memory_save confirms a save; unsaved chat facts may not transfer. Explain failures honestly. "
             "Acknowledge the user as creator of this Keno app when stated. "
@@ -476,8 +476,7 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
             "Use coverage information to distinguish complete extracted text from shortened excerpts or missing/scanned pages. "
             "Do not claim to have visually reviewed every page. "
             "If evidence is insufficient, briefly identify the missing page or detail.\n" if has_uploads else "")
-            + f"Preferred response examples: {identity['response_examples']}\n"
-            f"Tool settings: {json.dumps(tool_settings)}")
+            + f"Preferred response examples: {identity['response_examples']}\n")
 
 
 async def fit_context(value, route=None, attachments=None):
@@ -640,7 +639,9 @@ def user_name_reply(value, messages, attachments):
         return None
     # Keep malformed declarations on the normal path rather than treating them
     # as verified identity. Do not hardcode any particular person's name.
-    if not name or len(name) > 80 or not all(c.isalpha() or c in " -'’" for c in name):
+    if not name:
+        return "I don't have your name saved or stated in this chat yet."
+    if len(name) > 80 or not all(c.isalpha() or c in " -'’" for c in name):
         return None
     return f"Your name is {name}."
 
@@ -801,6 +802,11 @@ async def chat(value: ChatInput):
             prior = c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY created_at DESC LIMIT 2", (value.conversation_id,)).fetchall()
         history = "\n".join(str(t[0])[:300] for t in reversed(prior))
         route = await routing.decide(app.state.laya, value.message, history, attachments)
+        # Explicit user actions outrank a probabilistic answer/action label.
+        # Preserve the raw Laya decision so disagreements stay observable.
+        if not attachments and not tools.NO_SAVE.search(value.message) and not tools.FORGET_REQUEST.search(value.message):
+            if tools.FIRSTHAND_SAVE.search(value.message.strip()) or tools.FOLLOWUP_SAVE.fullmatch(value.message.strip()):
+                route.update(tool_family="memory", tool_policy="explicit_memory_command", thinking=False, effort_policy="explicit_save_quick")
         messages, metadata = await fit_context(value, route, attachments)
         metadata["context_prepare_seconds"] = round(time.monotonic() - prepare_started, 3)
         with db() as c:

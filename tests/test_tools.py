@@ -30,16 +30,16 @@ def native_model(actions, mode='ok', seen=None, requests=None):
 def test_quick_planner_answer_uses_one_inference_and_preserves_replay(client):
     requests = []
     main.app.state.laya = fake_router(family='memory')
-    main.app.state.llm = native_model(['Your name is Zain.'], requests=requests)
+    main.app.state.llm = native_model(['No preferences are saved.'], requests=requests)
     conversation = new_conversation(client)
-    first = send(client, conversation, message='What is my name?').json()
-    assert first['reply'] == 'Your name is Zain.'
+    first = send(client, conversation, message='Explain my saved preferences.').json()
+    assert first['reply'] == 'No preferences are saved.'
     assert first['context']['answer_source'] == 'tool_planner'
     assert '_planner_reply' not in first['context']
     assert first['context']['tool_planning_rounds'] == 1
     assert first['context']['tool_execution_seconds'] == 0
     assert sum(path == '/v1/chat/completions' for path, _ in requests) == 1
-    assert send(client, conversation, message='What is my name?').json()['reply'] == first['reply']
+    assert send(client, conversation, message='Explain my saved preferences.').json()['reply'] == first['reply']
     assert sum(path == '/v1/chat/completions' for path, _ in requests) == 1
 
 
@@ -66,7 +66,7 @@ def test_planner_reuse_cannot_claim_unsaved_memory_and_honors_deep_thinking(clie
     requests.clear()
     main.app.state.laya = fake_router(family='memory')
     main.app.state.llm = native_model(['{"name":"Zain"}'], requests=requests)
-    response = send(client, new_conversation(client), request_id='planner-json-001', message='What is my name?').json()
+    response = send(client, new_conversation(client), request_id='planner-json-001', message='Explain my saved preferences.').json()
     assert response['reply'] == 'Hello Zain'
     assert sum(path == '/v1/chat/completions' for path, _ in requests) == 2
 
@@ -367,7 +367,8 @@ def test_user_name_answer_is_grounded_and_not_assistant_identity(client):
     followup = send(client, conversation, request_id='name-followup-001', message='What is my name?').json()
     assert followup['reply'] == 'Your name is Amira.'
     fresh = send(client, new_conversation(client), request_id='name-fresh-001', message='What is my name?').json()
-    assert fresh['context'].get('answer_source') != 'user_name_guard'
+    assert fresh['context'].get('answer_source') == 'user_name_guard'
+    assert "don't have your name" in fresh['reply']
     client.put('/api/v1/memories/user.name', json={'key':'user.name', 'content':'My name is Budi.'})
     requests.clear()
     main.app.state.laya = fake_router(family='memory', thinking='deep')
@@ -546,3 +547,16 @@ def test_name_is_relevant_only_and_bad_preamble_not_replayed(client):
     recalled=send(client,new_conversation(client),request_id='relevance-recall-001',message='What is my name?').json()
     assert recalled['reply'] == 'Your name is Zain.'
     assert main.history_answer_for_prompt('What is my name?', 'Your name is Zain. You told me earlier.') == 'Your name is Zain. You told me earlier.'
+
+
+def test_firsthand_save_required_even_when_router_says_answer(client):
+    requests = []
+    main.app.state.laya = fake_router(family='none')
+    main.app.state.llm = native_model([[('memory_save', {'key': 'user.marker', 'quote': 'my evaluation marker is sample123', 'category': 'fact'})]], requests=requests)
+    result = send(client, new_conversation(client), message='Remember that my evaluation marker is sample123.').json()
+    assert result['context']['route']['tool_policy'] == 'explicit_memory_command'
+    assert result['context']['memory_changes'] == [{'action': 'save', 'key': 'user.marker'}]
+    payload = next(body for path, body in requests if path == '/v1/chat/completions')
+    assert payload['tool_choice'] == 'required'
+    assert [d['function']['name'] for d in payload['tools']] == ['memory_save']
+    assert 'sample123' in client.get('/api/v1/memories').json()[0]['content']

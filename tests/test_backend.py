@@ -9,14 +9,15 @@ from app import main
 from scripts.database import snapshot, validate
 
 
-def test_explicit_save_without_tool_cannot_claim_persistence(client):
+def test_explicit_save_overrides_answer_only_route(client):
     calls = []
     main.app.state.llm = fake_model(calls=calls)
     main.app.state.laya = fake_router(family='none')
     response = send(client, new_conversation(client), message='Remember that my name is Zain.').json()
     assert response['context']['answer_source'] == 'memory_guard'
-    assert "It hasn't been saved for future chats" in response['reply']
-    assert client.get('/api/v1/memories').json() == []
+    assert response['context']['route']['tool_policy'] == 'explicit_memory_command'
+    assert response['context']['route']['decisions']['tool_need']['choice'] == 'answer'
+    assert client.get('/api/v1/memories').json()[0]['key'] == 'user.name'
     assert not any(path == '/v1/chat/completions' for path, _ in calls)
 
 
@@ -541,3 +542,11 @@ def test_closing_filter_preserves_middle_sentence_and_handles_trailing_newline()
     f = ResponseFilter('help')
     text = 'Useful answer.\nLet me know if you need further assistance.\nSpecific further information.'
     assert f.push(text, final=True) == text
+
+
+def test_unknown_name_does_not_use_model_identity(client):
+    calls = []
+    main.app.state.llm = fake_model(calls=calls, chunks=["I'm Keno."])
+    result = send(client, new_conversation(client), message='What is my name?').json()
+    assert "don't have your name" in result['reply']
+    assert not any(path == '/v1/chat/completions' for path, _ in calls)
