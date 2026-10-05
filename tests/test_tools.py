@@ -13,6 +13,7 @@ def native_model(actions, mode='ok', seen=None, requests=None):
     pending = iter(actions)
     def handler(request):
         body = json.loads(request.content) if request.content else {}
+        assert all(m['role'] != 'system' for m in body.get('messages', [])[1:]), 'System message must be at the beginning.'
         if requests is not None:
             requests.append((request.url.path, body))
         if request.url.path == '/v1/chat/completions' and not body.get('stream'):
@@ -376,7 +377,8 @@ def test_changing_retrieval_preserves_instruction_and_history_prefix(client):
     assert first[0] == second[0]
     assert second[1]['role'] == 'user' and second[1]['content'] == 'Hello'
     assert second[2]['role'] == 'assistant'
-    assert second[3]['role'] == 'system' and 'Prefer short replies' in second[3]['content']
+    assert second[3]['role'] == 'user' and 'Prefer short replies' in second[3]['content']
+    assert second[3]['content'].startswith('Another question')
     assert 'Prefer short replies' not in second[0]['content']
 
 
@@ -389,5 +391,5 @@ def test_tool_completion_does_not_rewrite_system_prefix(client):
     payloads=[body for path,body in requests if path == '/v1/chat/completions']
     assert len(payloads) == 2
     assert payloads[0]['messages'][0] == payloads[1]['messages'][0]
-    assert payloads[1]['messages'][-1]['role'] == 'system'
-    assert 'Tool phase is complete' in payloads[1]['messages'][-1]['content']
+    assert payloads[1]['messages'][-1]['role'] == 'tool'
+    assert all(m['role'] != 'system' for m in payloads[1]['messages'][1:])

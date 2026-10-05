@@ -94,9 +94,8 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         for message in messages:
             if message["role"] != "user": continue
             content = message["content"]
-            if isinstance(content, str) and content.startswith(session.value.message + "\n\nSelected uploaded-file"):
-                message["content"] = session.value.message
-            elif isinstance(content, list) and content and content[0].get("type") == "text" and content[0]["text"].startswith(session.value.message + "\n\nSelected uploaded-file"):
-                content[0]["text"] = session.value.message
-    messages.append({"role": "system", "content": "Tool phase is complete. Answer the user's request using successful results. Do not request more tools."})
+            if isinstance(content, str) and content.startswith(session.value.message) and "\n\nSelected uploaded-file" in content:
+                message["content"] = content.split("\n\nSelected uploaded-file", 1)[0]
+            elif isinstance(content, list) and content and content[0].get("type") == "text" and content[0]["text"].startswith(session.value.message) and "\n\nSelected uploaded-file" in content[0]["text"]:
+                content[0]["text"] = content[0]["text"].split("\n\nSelected uploaded-file", 1)[0]
     await check_budget(messages, metadata, [])

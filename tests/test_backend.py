@@ -65,6 +65,7 @@ def fake_model(mode="ok", seen=None, calls=None):
         payload = json.loads(request.content) if request.content else {}
         if calls is not None:
             calls.append((request.url.path, payload))
+        assert all(m["role"] != "system" for m in payload.get("messages", [])[1:]), "System message must be at the beginning."
         if request.url.path == "/health":
             return httpx.Response(200, json={"status": "ok"})
         if mode == "offline":
