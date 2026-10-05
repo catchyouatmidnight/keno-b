@@ -29,6 +29,32 @@ TOOL_NEED = {"type": "choice",
              "criteria": {"answer": "answer general knowledge, conversation, explanations or how-to instructions, such as changing a phone theme; no lookup, calculation, file operation or memory change required",
                           "action": "perform a calculation, retrieve live weather/search, inspect selected files, save/recall/correct/delete personal memory, or remember a firsthand personal declaration/introduction"}}
 
+OPTIONS = {"thinking": {"quick", "deep"}, "tool_need": {"answer", "action"},
+           "source": {"text", "vision"}, "document_scope": {"overview", "focused"},
+           "tool_family": {"none", "memory", "documents", "calculator", "live", "multiple"}}
+
+
+async def predict(client, state, questions):
+    response = await client.post("/v1/systemone", json={"state": state, "questions": questions,
+                                "model": "multilingual", "max_len": 1024, "head_max_len": 256})
+    response.raise_for_status()
+    answers = response.json()["answers"]
+    decisions = {}
+    for key in questions:
+        answer = answers[key]
+        choice = answer["choice"]
+        if choice not in OPTIONS[key]:
+            raise ValueError("Invalid routing choice")
+        raw = answer.get("answer_confidence")
+        if raw is None:
+            probs = answer["probabilities"]
+            raw = probs[choice] if isinstance(probs, dict) else None
+        confidence = float(raw)
+        if not math.isfinite(confidence) or not 0 <= confidence <= 1:
+            raise ValueError("Invalid routing confidence")
+        decisions[key] = {"choice": choice, "confidence": round(confidence, 4)}
+    return decisions
+
 
 async def decide(client, message, history, attachments):
     start = time.monotonic()
@@ -38,34 +64,16 @@ async def decide(client, message, history, attachments):
     # A separate binary necessity check prevents a broad family choice from
     # turning advice into an unnecessary multi-tool planner call.
     # Laya still decides quick/deep for every request; this is not a keyword router.
-    questions = QUESTIONS if attachments else {"thinking": QUESTIONS["thinking"],
-                                               "tool_need": TOOL_NEED,
-                                               "tool_family": QUESTIONS["tool_family"]}
+    questions = QUESTIONS if attachments else {"thinking": QUESTIONS["thinking"], "tool_need": TOOL_NEED}
     try:
-        response = await client.post("/v1/systemone", json={"state": state, "questions": questions,
-                                    "model": "multilingual", "max_len": 1024, "head_max_len": 256})
-        response.raise_for_status()
-        result = response.json()
-        answers = result["answers"]
-        decisions = {}
-        for key, options in (("thinking", {"quick", "deep"}), ("tool_need", {"answer", "action"}), ("source", {"text", "vision"}),
-                             ("document_scope", {"overview", "focused"}),
-                             ("tool_family", {"none", "memory", "documents", "calculator", "live", "multiple"})):
-            if key not in questions:
-                continue
-            answer = answers[key]
-            choice = answer["choice"]
-            if choice not in options:
-                raise ValueError("Invalid routing choice")
-            # Prefer calibrated chosen-answer confidence, never entropy confidence.
-            raw = answer.get("answer_confidence")
-            if raw is None:
-                probs = answer["probabilities"]
-                raw = probs[choice] if isinstance(probs, dict) else None
-            confidence = float(raw)
-            if not math.isfinite(confidence) or not 0 <= confidence <= 1:
-                raise ValueError("Invalid routing confidence")
-            decisions[key] = {"choice": choice, "confidence": round(confidence, 4)}
+        decisions = await predict(client, state, questions)
+        call_count, question_count = 1, len(questions)
+        # Advice needs no family classification. Only action turns pay for the
+        # second local request; file turns retain their single four-head request.
+        if not attachments and decisions["tool_need"]["choice"] == "action":
+            decisions.update(await predict(client, state, {"tool_family": QUESTIONS["tool_family"]}))
+            call_count += 1
+            question_count += 1
         uncertain = decisions["thinking"]["confidence"] < 0.65 or state["request_truncated"]
         # Latency policy: require a confident deep choice. Preserve Laya's raw
         # decision for inspection; uncertain short requests default to quick.
@@ -73,12 +81,10 @@ async def decide(client, message, history, attachments):
                     and decisions["thinking"]["confidence"] >= 0.65) or state["request_truncated"]
         vision = bool(attachments) and (decisions["source"]["choice"] == "vision" or
                  any(a["kind"] == "image" or not a["characters"] for a in attachments))
-        family = decisions["tool_family"]["choice"]
-        if not attachments and decisions["tool_need"]["choice"] == "answer":
-            family = "none"
+        family = decisions["tool_family"]["choice"] if "tool_family" in decisions else "none"
         return {"engine": "laya", "thinking": thinking, "vision": vision,
                 "document_scope": decisions["document_scope"]["choice"] if attachments else "focused",
-                "question_count": len(questions),
+                "question_count": question_count, "call_count": call_count,
                 "tool_family": family,
                 "tool_policy": "attachment_route" if attachments else
                                "answer_only" if decisions["tool_need"]["choice"] == "answer" else "action_route",

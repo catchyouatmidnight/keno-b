@@ -492,7 +492,9 @@ def test_answer_only_gate_skips_false_multiple_planner_and_streams(client):
     with main.db() as connection:
         raw = connection.execute("SELECT metadata FROM turns WHERE request_id='advice-gate-001'").fetchone()[0]
     metadata=json.loads(raw)
-    assert metadata['route']['decisions']['tool_family']['choice'] == 'multiple'
+    assert 'tool_family' not in metadata['route']['decisions']
+    assert metadata['route']['question_count'] == 2
+    assert metadata['route']['call_count'] == 1
     assert metadata['route']['tool_family'] == 'none'
     assert metadata['route']['tool_policy'] == 'answer_only'
     assert metadata['available_tools'] == []
@@ -501,14 +503,24 @@ def test_answer_only_gate_skips_false_multiple_planner_and_streams(client):
     assert len(payloads) == 1 and payloads[0]['stream'] is True
     assert 'tools' not in payloads[0]
     assert "Never preface unrelated answers with the user's name" in payloads[0]['messages'][0]['content']
+    assert 'Start with the first useful step or fact.' in payloads[0]['messages'][0]['content']
+    assert 'Do not restate the question' in payloads[0]['messages'][0]['content']
 
 
 def test_action_gate_keeps_calculator_available(client):
-    main.app.state.laya = fake_router(family='calculator', tool_need='action')
+    routed=[]
+    main.app.state.laya = fake_router(family='calculator', tool_need='action', seen=routed)
     main.app.state.llm = native_model([[('calculator', {'expression':'17*23'})]])
     response = send(client, new_conversation(client), message='Calculate 17 times 23').json()
     assert response['context']['route']['tool_policy'] == 'action_route'
+    assert response['context']['route']['question_count'] == 3
+    assert response['context']['route']['call_count'] == 2
+    assert [list(body['questions']) for body in routed] == [['thinking', 'tool_need'], ['tool_family']]
     assert response['context']['tool_calls'][0]['status'] == 'complete'
+    main.app.state.laya = fake_router(family='invalid', tool_need='action')
+    invalid = send(client, new_conversation(client), request_id='invalid-family-stage', message='Calculate 2+2')
+    assert invalid.status_code == 503
+    assert not main.app.state.generation_lock.locked()
 
 
 def test_name_is_relevant_only_and_bad_preamble_not_replayed(client):

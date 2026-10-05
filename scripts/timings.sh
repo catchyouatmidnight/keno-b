@@ -21,6 +21,7 @@ for index, (raw,) in enumerate(rows, 1):
     output = {"recent_response": index,
               "laya_seconds": route.get("seconds"),
               "laya_question_count": route.get("question_count"),
+              "laya_call_count": route.get("call_count"),
               "tool_family": route.get("tool_family"),
               "tool_decision": route.get("decisions", {}).get("tool_family"),
               "tool_need": route.get("decisions", {}).get("tool_need"),

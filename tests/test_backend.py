@@ -307,8 +307,9 @@ def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
     assert requests[1]['reasoning_format'] == 'deepseek'
     assert 'Hi' in decisions[-1]['state']['earlier_user_requests']
     assert 'Hello Zain' not in decisions[-1]['state']['earlier_user_requests']
-    assert list(decisions[-1]['questions']) == ['thinking', 'tool_need', 'tool_family']
-    assert quick['context']['route']['question_count'] == 3
+    assert list(decisions[-1]['questions']) == ['thinking', 'tool_need']
+    assert quick['context']['route']['question_count'] == 2
+    assert quick['context']['route']['call_count'] == 1
     assert quick['context']['model_first_delta_seconds'] <= quick['context']['model_first_token_seconds']
     assert quick['context']['model_first_reasoning_seconds'] >= 0
     assert quick['context']['hidden_reasoning_seconds'] >= 0

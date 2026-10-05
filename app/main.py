@@ -455,7 +455,7 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
     return (f"You are {identity['name']}, the ASSISTANT. {identity['personality']}\n"
             "The USER is a different person. In user messages, 'I' and 'my' refer to the USER, not you. "
             "Use user evidence for identity questions; admit when unknown. "
-            "Answer the latest question concisely; admit uncertainty. "
+            "Answer directly and concisely. Start with the first useful step or fact. Do not restate the question, announce that steps follow, or add stock openings and sign-offs. Admit uncertainty. "
             "Use profile and saved memories only when relevant to the current question. Never preface unrelated answers with the user's name or personal facts. "
             "For device instructions, do not invent exact menu labels or paths; if unsure, say so and ask for the software version or a screenshot. "
             "Use natural language unless JSON is requested. Never invent weather or tool success. "
