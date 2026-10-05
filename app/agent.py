@@ -10,8 +10,10 @@ from . import tools
 async def plan(client, model, messages, definitions, session, metadata, check_budget):
     allowed = {d["function"]["name"] for d in definitions}
     started, count = time.monotonic(), 0
+    planning_seconds, execution_seconds, rounds = 0.0, 0.0, 0
     for round_number in range(tools.MAX_ROUNDS):
         await check_budget(messages, metadata, definitions)
+        planning_started = time.monotonic()
         response = await client.post("/v1/chat/completions", json={
             "model": model, "messages": messages, "tools": definitions, "tool_choice": "auto",
             "parallel_tool_calls": False, "stream": False, "temperature": 0,
@@ -19,6 +21,8 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
             "reasoning_budget_tokens": 0, "reasoning_format": "deepseek", "cache_prompt": True})
         response.raise_for_status()
         body = response.json()
+        planning_seconds += time.monotonic() - planning_started
+        rounds += 1
         choices = body.get("choices") if isinstance(body, dict) else None
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             raise ValueError("Model returned invalid tool choices")
@@ -30,6 +34,13 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         if not isinstance(calls, list) or any(not isinstance(call, dict) or not isinstance(call.get("function"), dict) for call in calls):
             raise ValueError("Model returned malformed tool calls")
         if not calls:
+            content = message.get("content")
+            # A complete quick answer from the first pass needs no second inference.
+            # Keep it transient: generate() applies memory/weather guards first.
+            if count == 0 and not metadata.get("route", {}).get("thinking", False) and choice.get("finish_reason") == "stop" and isinstance(content, str) and content.strip() and not content.lstrip().startswith(("{", "[", "```")):
+                if len(content) > 100_000:
+                    raise ValueError("Model output exceeded limit")
+                metadata["_planner_reply"] = content
             break
         if choice.get("finish_reason") == "length" or len(calls) > tools.MAX_CALLS - count:
             raise ValueError("Tool call exceeded its generation or execution limit")
@@ -46,6 +57,7 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
             normalized.append({"id": call_id, "type": "function", "function": {"name": name, "arguments": raw if isinstance(raw, str) else json.dumps(raw)}})
             event = {"name": name, "status": "running", "index": count}
             yield "tool", event
+            execution_started = time.monotonic()
             try:
                 if name not in allowed: raise ValueError("Tool was not allowed for this request")
                 if not isinstance(raw, str) or len(raw) > 8000: raise ValueError("Tool arguments exceed limit")
@@ -58,6 +70,7 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                 result = {"error": detail}
                 status = "failed"
                 may_continue = True
+            execution_seconds += time.monotonic() - execution_started
             result_event = {**event, "status": status}
             if status == "failed": result_event["detail"] = result["error"]
             if isinstance(result, dict) and "key" in result: result_event["memory_key"] = result["key"]
@@ -69,6 +82,9 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         if not may_continue or count >= tools.MAX_CALLS:
             break
     metadata["tool_seconds"] = round(time.monotonic() - started, 3)
+    metadata["tool_model_seconds"] = round(planning_seconds, 3)
+    metadata["tool_execution_seconds"] = round(execution_seconds, 3)
+    metadata["tool_planning_rounds"] = rounds
     metadata["tool_calls"] = session.events
     metadata["memory_changes"] = [{"action": m["action"], "key": m["key"]} for m in session.mutations]
     metadata["web_sources"] = session.web_sources

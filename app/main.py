@@ -579,6 +579,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
         if definitions:
             async for name, data in agent.plan(app.state.llm, LLM_MODEL, messages, definitions, session, metadata, check_tool_budget):
                 yield name, data
+        planner_reply = metadata.pop("_planner_reply", None)
         guarded = tools.weather_reply(session, metadata)
         memory_guarded = tools.memory_reply(session, metadata) if guarded is None else None
         if memory_guarded is not None: guarded = memory_guarded
@@ -586,6 +587,14 @@ async def generate(value, messages, metadata, request_started=None, attachments=
             answer, finished, reason = guarded, True, "stop"
             metadata["answer_source"] = ("memory_guard" if memory_guarded is not None else
                                         "weather_tool" if session.weather_results else "weather_guard")
+            metadata["first_token_seconds"] = round(time.monotonic() - request_started, 3)
+            metadata["hidden_reasoning_seconds"] = 0
+            yield "timing", {"first_token_seconds": metadata["first_token_seconds"]}
+            yield "delta", {"text": answer}
+        elif planner_reply is not None:
+            answer, finished, reason = planner_reply, True, "stop"
+            metadata["answer_source"] = "tool_planner"
+            # The planner is non-streaming, so individual token timings are unknown.
             metadata["first_token_seconds"] = round(time.monotonic() - request_started, 3)
             metadata["hidden_reasoning_seconds"] = 0
             yield "timing", {"first_token_seconds": metadata["first_token_seconds"]}

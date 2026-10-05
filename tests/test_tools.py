@@ -8,18 +8,61 @@ from app import main, documents, history
 from test_backend import client, fake_model, fake_router, new_conversation, send, simple_pdf, upload
 
 
-def native_model(actions, mode='ok', seen=None):
+def native_model(actions, mode='ok', seen=None, requests=None):
     baseline = fake_model(mode, seen=seen)
     pending = iter(actions)
     def handler(request):
         body = json.loads(request.content) if request.content else {}
+        if requests is not None:
+            requests.append((request.url.path, body))
         if request.url.path == '/v1/chat/completions' and not body.get('stream'):
             calls = next(pending, [])
+            if isinstance(calls, str):
+                return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': calls}, 'finish_reason': 'stop'}]})
             return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'tool_calls': [
                 {'id': str(i), 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}
                 for i, (name, args) in enumerate(calls)]}, 'finish_reason': 'tool_calls' if calls else 'stop'}]})
         return baseline._transport.handle_request(request)
     return httpx.AsyncClient(base_url='http://llm:8080', transport=httpx.MockTransport(handler))
+
+
+def test_quick_planner_answer_uses_one_inference_and_preserves_replay(client):
+    requests = []
+    main.app.state.laya = fake_router(family='memory')
+    main.app.state.llm = native_model(['Your name is Zain.'], requests=requests)
+    conversation = new_conversation(client)
+    first = send(client, conversation, message='What is my name?').json()
+    assert first['reply'] == 'Your name is Zain.'
+    assert first['context']['answer_source'] == 'tool_planner'
+    assert '_planner_reply' not in first['context']
+    assert first['context']['tool_planning_rounds'] == 1
+    assert first['context']['tool_execution_seconds'] == 0
+    assert sum(path == '/v1/chat/completions' for path, _ in requests) == 1
+    assert send(client, conversation, message='What is my name?').json()['reply'] == first['reply']
+    assert sum(path == '/v1/chat/completions' for path, _ in requests) == 1
+
+
+def test_planner_reuse_cannot_claim_unsaved_memory_or_skip_deep_thinking(client):
+    requests = []
+    main.app.state.laya = fake_router(family='memory')
+    main.app.state.llm = native_model(['Saved your name Zain.'], requests=requests)
+    response = send(client, new_conversation(client), message='Remember that my name is Zain.').json()
+    assert response['context']['answer_source'] == 'memory_guard'
+    assert "hasn't been saved" in response['reply']
+    assert client.get('/api/v1/memories').json() == []
+    requests.clear()
+    main.app.state.laya = fake_router(family='memory', thinking='deep')
+    main.app.state.llm = native_model(['A quick guess.'], requests=requests)
+    response = send(client, new_conversation(client), request_id='planner-deep-001', message='Analyze this carefully.').json()
+    assert response.get('reply') == 'Hello Zain', response
+    assert sum(path == '/v1/chat/completions' for path, _ in requests) == 2
+    assert response['context'].get('answer_source') != 'tool_planner'
+    requests.clear()
+    main.app.state.laya = fake_router(family='memory')
+    main.app.state.llm = native_model(['{"name":"Zain"}'], requests=requests)
+    response = send(client, new_conversation(client), request_id='planner-json-001', message='What is my name?').json()
+    assert response['reply'] == 'Hello Zain'
+    assert sum(path == '/v1/chat/completions' for path, _ in requests) == 2
 
 
 def test_native_memory_save_correct_forget_and_idempotent_replay(client):
