@@ -43,7 +43,7 @@ def client(tmp_path, monkeypatch):
         yield client
 
 
-def fake_router(thinking="quick", source="text", confidence=0.9, mode="ok", seen=None, scope="focused", family="none"):
+def fake_router(thinking="quick", source="text", confidence=0.9, mode="ok", seen=None, scope="focused", family="none", tool_need=None):
     def handler(request):
         if request.url.path == "/health":
             return httpx.Response(200, json={"status": "ok"})
@@ -52,6 +52,7 @@ def fake_router(thinking="quick", source="text", confidence=0.9, mode="ok", seen
         if mode == "offline":
             raise httpx.ConnectError("offline", request=request)
         answers = {"thinking": {"choice": thinking, "answer_confidence": confidence},
+                   "tool_need": {"choice": tool_need or ('answer' if family == 'none' else 'action'), "answer_confidence": confidence},
                    "source": {"choice": source, "answer_confidence": confidence},
                    "document_scope": {"choice": scope, "answer_confidence": confidence},
                    "tool_family": {"choice": family, "answer_confidence": confidence}}
@@ -306,8 +307,8 @@ def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
     assert requests[1]['reasoning_format'] == 'deepseek'
     assert 'Hi' in decisions[-1]['state']['earlier_user_requests']
     assert 'Hello Zain' not in decisions[-1]['state']['earlier_user_requests']
-    assert list(decisions[-1]['questions']) == ['thinking', 'tool_family']
-    assert quick['context']['route']['question_count'] == 2
+    assert list(decisions[-1]['questions']) == ['thinking', 'tool_need', 'tool_family']
+    assert quick['context']['route']['question_count'] == 3
     assert quick['context']['model_first_delta_seconds'] <= quick['context']['model_first_token_seconds']
     assert quick['context']['model_first_reasoning_seconds'] >= 0
     assert quick['context']['hidden_reasoning_seconds'] >= 0

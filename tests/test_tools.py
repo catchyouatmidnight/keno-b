@@ -476,3 +476,34 @@ def test_explicit_name_parser_leaves_ambiguous_and_negated_requests_to_planner()
         assert explicit_name_save(text) is None
     assert explicit_name_save('Please remember that my name is Anne-Marie O’Neill.') == {
         'key':'user.name', 'quote':'my name is Anne-Marie O’Neill', 'category':'fact'}
+
+
+def test_answer_only_gate_skips_false_multiple_planner_and_streams(client):
+    requests=[]
+    main.app.state.laya = fake_router(family='multiple', tool_need='answer')
+    main.app.state.llm = native_model([], requests=requests)
+    response = client.post('/api/v1/chat', json={
+        'conversation_id':new_conversation(client), 'request_id':'advice-gate-001',
+        'message':'how can i change theme in samsung a36 device', 'max_tokens':512, 'stream':True})
+    assert response.status_code == 200
+    assert 'event: delta' in response.text and 'event: done' in response.text
+    with main.db() as connection:
+        raw = connection.execute("SELECT metadata FROM turns WHERE request_id='advice-gate-001'").fetchone()[0]
+    metadata=json.loads(raw)
+    assert metadata['route']['decisions']['tool_family']['choice'] == 'multiple'
+    assert metadata['route']['tool_family'] == 'none'
+    assert metadata['route']['tool_policy'] == 'answer_only'
+    assert metadata['available_tools'] == []
+    assert 'tool_planning_rounds' not in metadata
+    payloads=[body for path,body in requests if path == '/v1/chat/completions']
+    assert len(payloads) == 1 and payloads[0]['stream'] is True
+    assert 'tools' not in payloads[0]
+    assert "Never preface unrelated answers with the user's name" in payloads[0]['messages'][0]['content']
+
+
+def test_action_gate_keeps_calculator_available(client):
+    main.app.state.laya = fake_router(family='calculator', tool_need='action')
+    main.app.state.llm = native_model([[('calculator', {'expression':'17*23'})]])
+    response = send(client, new_conversation(client), message='Calculate 17 times 23').json()
+    assert response['context']['route']['tool_policy'] == 'action_route'
+    assert response['context']['tool_calls'][0]['status'] == 'complete'

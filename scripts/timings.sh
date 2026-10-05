@@ -23,6 +23,8 @@ for index, (raw,) in enumerate(rows, 1):
               "laya_question_count": route.get("question_count"),
               "tool_family": route.get("tool_family"),
               "tool_decision": route.get("decisions", {}).get("tool_family"),
+              "tool_need": route.get("decisions", {}).get("tool_need"),
+              "tool_policy": route.get("tool_policy"),
               "effort_policy": route.get("effort_policy"),
               "thinking": route.get("thinking"),
               "thinking_decision": route.get("decisions", {}).get("thinking"),

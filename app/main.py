@@ -446,6 +446,8 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
             "The USER is a different person. In user messages, 'I' and 'my' refer to the USER, not you. "
             "Answer user-name questions as 'Your name is …', using user evidence; admit when unknown. "
             "Answer the latest question concisely; admit uncertainty. "
+            "Use profile and saved memories only when relevant to the current question. Never preface unrelated answers with the user's name or personal facts. "
+            "For device instructions, do not invent exact menu labels or paths; if unsure, say so and ask for the software version or a screenshot. "
             "Use natural language unless JSON is requested. Never invent weather or tool success. "
             f"Keno has persistent SQLite memory across chats/restarts on this server. Automatic memory is {'enabled' if tool_settings['automatic_memory'] else 'off; explicit save requests still work'}. "
             "Only successful memory_save confirms a save; unsaved chat facts may not transfer. Explain failures honestly. "

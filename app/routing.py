@@ -24,15 +24,23 @@ QUESTIONS = {
                                  "multiple": "request needs more than one tool family"}},
 }
 
+TOOL_NEED = {"type": "choice",
+             "instructions": "Decide whether latest_request needs a tool operation or just an answer. Ignore earlier tasks unless latest_request explicitly continues them. Explaining how the user can do something does not mean performing it. Mentioning a device inside a question is not a lasting fact to save.",
+             "criteria": {"answer": "answer general knowledge, conversation, explanations or how-to instructions, such as changing a phone theme; no lookup, calculation, file operation or memory change required",
+                          "action": "perform a calculation, retrieve live weather/search, inspect selected files, save/recall/correct/delete personal memory, or remember a firsthand personal declaration/introduction"}}
+
 
 async def decide(client, message, history, attachments):
     start = time.monotonic()
     state = {"latest_request": message[:2400], "request_truncated": len(message) > 2400,
              "earlier_user_requests": history[-600:],
              "attachments": [{k: a[k] for k in ("id", "name", "kind", "pages", "characters")} for a in attachments]}
-    # Plain chat needs effort and tool-family decisions only.
+    # A separate binary necessity check prevents a broad family choice from
+    # turning advice into an unnecessary multi-tool planner call.
     # Laya still decides quick/deep for every request; this is not a keyword router.
-    questions = QUESTIONS if attachments else {k: QUESTIONS[k] for k in ("thinking", "tool_family")}
+    questions = QUESTIONS if attachments else {"thinking": QUESTIONS["thinking"],
+                                               "tool_need": TOOL_NEED,
+                                               "tool_family": QUESTIONS["tool_family"]}
     try:
         response = await client.post("/v1/systemone", json={"state": state, "questions": questions,
                                     "model": "multilingual", "max_len": 1024, "head_max_len": 256})
@@ -40,7 +48,7 @@ async def decide(client, message, history, attachments):
         result = response.json()
         answers = result["answers"]
         decisions = {}
-        for key, options in (("thinking", {"quick", "deep"}), ("source", {"text", "vision"}),
+        for key, options in (("thinking", {"quick", "deep"}), ("tool_need", {"answer", "action"}), ("source", {"text", "vision"}),
                              ("document_scope", {"overview", "focused"}),
                              ("tool_family", {"none", "memory", "documents", "calculator", "live", "multiple"})):
             if key not in questions:
@@ -65,10 +73,15 @@ async def decide(client, message, history, attachments):
                     and decisions["thinking"]["confidence"] >= 0.65) or state["request_truncated"]
         vision = bool(attachments) and (decisions["source"]["choice"] == "vision" or
                  any(a["kind"] == "image" or not a["characters"] for a in attachments))
+        family = decisions["tool_family"]["choice"]
+        if not attachments and decisions["tool_need"]["choice"] == "answer":
+            family = "none"
         return {"engine": "laya", "thinking": thinking, "vision": vision,
                 "document_scope": decisions["document_scope"]["choice"] if attachments else "focused",
                 "question_count": len(questions),
-                "tool_family": decisions["tool_family"]["choice"],
+                "tool_family": family,
+                "tool_policy": "attachment_route" if attachments else
+                               "answer_only" if decisions["tool_need"]["choice"] == "answer" else "action_route",
                 "uncertain": uncertain, "decisions": decisions,
                 "effort_policy": "truncated_deep" if state["request_truncated"] else
                                  "uncertain_quick" if uncertain else "laya_choice",
