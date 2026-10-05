@@ -22,7 +22,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from . import documents, routing, tools, history, agent
+from . import documents, routing, tools, history, agent, response_style
 
 VERSION = "0.3.2"
 DB_PATH = Path(os.environ.get("KENO_DB", "data/keno.db"))
@@ -633,6 +633,8 @@ async def generate(value, messages, metadata, request_started=None, attachments=
     first_token = False
     first_delta = None
     first_reasoning = None
+    first_content = None
+    opening = response_style.OpeningFilter(value.message, enabled=not attachments)
     session = tools.ToolSession(value, attachments or [], setting("tools"), db, now, app.state.lookup)
     try:
         metadata["max_tokens"] = value.max_tokens
@@ -664,7 +666,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
             yield "timing", {"first_token_seconds": metadata["first_token_seconds"]}
             yield "delta", {"text": answer}
         elif planner_reply is not None:
-            answer, finished, reason = planner_reply, True, "stop"
+            answer, finished, reason = opening.push(planner_reply, final=True), True, "stop"
             metadata["answer_source"] = "tool_planner"
             # The planner is non-streaming, so individual token timings are unknown.
             metadata["first_token_seconds"] = round(time.monotonic() - request_started, 3)
@@ -702,12 +704,16 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                                 first_reasoning = observed
                                 metadata["model_first_reasoning_seconds"] = round(observed - model_started, 3)
                         if delta:
+                            if first_content is None:
+                                first_content = time.monotonic()
+                            delta = opening.push(delta)
+                        if delta:
                             if not first_token:
                                 first_token = True
                                 token_time = time.monotonic()
                                 metadata["first_token_seconds"] = round(token_time - request_started, 3)
                                 metadata["model_first_token_seconds"] = round(token_time - model_started, 3)
-                                metadata["hidden_reasoning_seconds"] = round(token_time - first_reasoning, 3) if first_reasoning is not None else 0
+                                metadata["hidden_reasoning_seconds"] = round(first_content - first_reasoning, 3) if first_reasoning is not None else 0
                                 yield "timing", {"first_token_seconds": metadata["first_token_seconds"],
                                                  "model_first_token_seconds": metadata["model_first_token_seconds"]}
                             answer += delta
@@ -716,9 +722,22 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                             yield "delta", {"text": delta}
                         if choice.get("finish_reason"):
                             finished, reason = True, choice["finish_reason"]
+            if finished:
+                tail = opening.push('', final=True)
+                if tail:
+                    if not first_token:
+                        token_time = time.monotonic()
+                        metadata["first_token_seconds"] = round(token_time - request_started, 3)
+                        metadata["model_first_token_seconds"] = round(token_time - model_started, 3)
+                        metadata["hidden_reasoning_seconds"] = round(first_content - first_reasoning, 3) if first_reasoning is not None and first_content is not None else 0
+                        yield "timing", {"first_token_seconds": metadata["first_token_seconds"],
+                                         "model_first_token_seconds": metadata["model_first_token_seconds"]}
+                    answer += tail
+                    yield "delta", {"text": tail}
         if not finished or not answer.strip():
             raise ValueError("Model stream ended without a completed answer")
-        metadata.update(elapsed_seconds=round(time.monotonic() - start, 2), finish_reason=reason,
+        metadata.update(repeated_opening_removed=opening.removed,
+                        elapsed_seconds=round(time.monotonic() - start, 2), finish_reason=reason,
                         total_seconds=round(time.monotonic() - request_started, 3),
                         truncated=reason == "length", max_tokens=value.max_tokens)
         with db() as c:

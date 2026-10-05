@@ -61,7 +61,7 @@ def fake_router(thinking="quick", source="text", confidence=0.9, mode="ok", seen
     return httpx.AsyncClient(base_url="http://laya:8000", transport=httpx.MockTransport(handler))
 
 
-def fake_model(mode="ok", seen=None, calls=None):
+def fake_model(mode="ok", seen=None, calls=None, chunks=None):
     def handler(request):
         payload = json.loads(request.content) if request.content else {}
         if calls is not None:
@@ -80,9 +80,9 @@ def fake_model(mode="ok", seen=None, calls=None):
         if request.url.path == "/v1/chat/completions":
             if mode == "failure":
                 return httpx.Response(500, json={"error": "failed"})
-            chunks = ["Hello ", "Zain"]
+            pieces = chunks if chunks is not None else ["Hello ", "Zain"]
             body = '' if mode == 'no_reasoning' else 'data: ' + json.dumps({"choices": [{"delta": {"reasoning_content": "Private reasoning must not become the answer"}, "finish_reason": None}]}) + '\n\n'
-            body += "".join('data: ' + json.dumps({"choices": [{"delta": {"content": chunk}, "finish_reason": None}]}) + '\n\n' for chunk in chunks)
+            body += "".join('data: ' + json.dumps({"choices": [{"delta": {"content": chunk}, "finish_reason": None}]}) + '\n\n' for chunk in pieces)
             if mode != "interrupted":
                 body += 'data: ' + json.dumps({"choices": [{"delta": {}, "finish_reason": "length" if mode == "length" else "stop"}]}) + '\n\ndata: [DONE]\n\n'
             return httpx.Response(200, text=body, headers={"Content-Type": "text/event-stream"})
@@ -453,3 +453,44 @@ def test_v1_backup_migrates_without_resetting_personal_state(client, tmp_path):
     with main.db() as db:
         assert db.execute('PRAGMA user_version').fetchone()[0] == 3
         assert db.execute('SELECT count(*) FROM attachments').fetchone()[0] == 0
+
+
+def test_repeated_howto_opening_filtered_before_stream_save_and_replay(client):
+    message='how can i change theme in samsung a36 device'
+    calls=[]
+    main.app.state.llm=fake_model('no_reasoning', calls=calls, chunks=[
+        'T', 'o change the theme on your Samsung A36 device, follow these steps:',
+        '\n', '\n1. Open Settings.', '\n2. Choose your theme.'])
+    conversation=new_conversation(client)
+    streamed=send(client,conversation,message=message,stream=True)
+    assert streamed.status_code == 200
+    events=[json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith('data: ') and '"text"' in line]
+    visible=''.join(item['text'] for item in events)
+    assert visible == '1. Open Settings.\n2. Choose your theme.'
+    assert 'To change the theme' not in visible
+    replay=send(client,conversation,message=message).json()
+    assert replay['reply'] == visible
+    assert replay['context']['repeated_opening_removed'] is True
+    assert sum(path == '/v1/chat/completions' for path,body in calls) == 1
+    assert replay['context']['model_first_token_seconds'] >= replay['context']['model_first_delta_seconds']
+    with main.db() as connection:
+        saved=connection.execute('SELECT assistant_text FROM turns WHERE conversation_id=?', (conversation,)).fetchone()[0]
+    assert saved == visible
+
+
+def test_opening_filter_preserves_conditions_quotes_and_incomplete_answers():
+    from app.response_style import OpeningFilter
+    question='how can i change theme in samsung a36 device'
+    for answer in ['To avoid losing your data, follow these steps:\n1. Back up first.',
+                   'To safely change theme in Samsung A36 device, follow these steps:\n1. Back up first.',
+                   '```text\nTo change theme, follow these steps:\n```',
+                   'To change the theme on your Samsung A36 device, follow these steps:']:
+        assert OpeningFilter(question).push(answer, final=True) == answer
+    quoted='To change theme in Samsung A36 device, follow these steps:\n1. Open Settings.'
+    assert OpeningFilter('Translate this quote verbatim').push(quoted, final=True) == quoted
+    assert OpeningFilter(question, enabled=False).push(quoted, final=True) == quoted
+    opening=OpeningFilter(question)
+    assert opening.push('Hello!') == 'Hello!'
+    bounded=OpeningFilter(question)
+    long='To ' + 'x' * 600
+    assert bounded.push(long) == long
