@@ -12,8 +12,8 @@ MAX_ROUNDS = 2
 WRITE_REQUEST = re.compile(r"\b(remember|save|forget|delete|remove|ingat|simpan|hapus|lupakan)\b", re.I)
 FORGET_REQUEST = re.compile(r"\b(forget|delete|remove|hapus|lupakan)\b", re.I)
 FOLLOWUP_SAVE = re.compile(r"^(?:please\s+)?(?:save|remember|simpan|ingat)(?:\s+(?:this|that|it|me|ini|itu|saya))?(?:\s+(?:please|for future chats))?[.!?]*$", re.I)
-# Detect an explicit firsthand save request only for truthful acknowledgement.
-# Laya still selects tools; this never extracts a fact or performs a write.
+# Detect an explicit firsthand save request for acknowledgement and required
+# save planning on Laya's memory route. This does not extract or write a fact.
 FIRSTHAND_SAVE = re.compile(r"^(?:please\s+)?(?:remember|save|simpan|ingat)\s+(?:that\s+)?(?:my\b|i\b|i'm\b|the\s+fact\b|nama\s+saya\b|saya\b)", re.I)
 
 

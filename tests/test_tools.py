@@ -393,3 +393,39 @@ def test_tool_completion_does_not_rewrite_system_prefix(client):
     assert payloads[0]['messages'][0] == payloads[1]['messages'][0]
     assert payloads[1]['messages'][-1]['role'] == 'tool'
     assert all(m['role'] != 'system' for m in payloads[1]['messages'][1:])
+
+
+def test_explicit_save_requires_validated_tool_and_survives_new_chat(client):
+    requests=[]
+    main.app.state.laya = fake_router(family='memory')
+    client.put('/api/v1/tools/settings', json={'automatic_memory':False})
+    main.app.state.llm = native_model([[('memory_save', {'key':'user.name', 'quote':'my name is Amira', 'category':'fact'})]], requests=requests)
+    saved = send(client, new_conversation(client), message='Remember that my name is Amira.').json()
+    assert saved['context']['tool_save_required'] is True
+    assert saved['context']['tool_calls'][0]['status'] == 'complete'
+    assert saved['reply'].startswith('Saved: my name is Amira')
+    payload = next(body for path,body in requests if path == '/v1/chat/completions')
+    assert payload['tool_choice'] == 'required'
+    assert [d['function']['name'] for d in payload['tools']] == ['memory_save']
+    main.app.state.laya = fake_router(family='none')
+    main.app.state.llm = fake_model()
+    recalled = send(client, new_conversation(client), request_id='forced-save-recall-001', message='What is my name?').json()
+    assert recalled['reply'] == 'Your name is Amira.'
+
+
+def test_required_save_preserves_quote_validation_and_other_tool_choices(client):
+    requests=[]
+    main.app.state.laya = fake_router(family='memory')
+    bad = [('memory_save', {'key':'user.name', 'quote':'Invented fact', 'category':'fact'})]
+    main.app.state.llm = native_model([bad,bad], requests=requests)
+    result = send(client, new_conversation(client), message='Remember that my name is Amira.').json()
+    assert all(event['status'] == 'failed' for event in result['context']['tool_calls'])
+    assert client.get('/api/v1/memories').json() == []
+    assert "hasn't been saved" in result['reply']
+    requests.clear()
+    main.app.state.llm = native_model(['No save requested.'], requests=requests)
+    result = send(client, new_conversation(client), request_id='forced-no-save-001', message='Remember that my name is Amira, but do not save it.').json()
+    payload = next(body for path,body in requests if path == '/v1/chat/completions')
+    assert payload['tool_choice'] == 'auto'
+    assert result['context']['tool_save_required'] is False
+    assert client.get('/api/v1/memories').json() == []

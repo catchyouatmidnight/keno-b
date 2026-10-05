@@ -9,13 +9,26 @@ from . import tools
 
 async def plan(client, model, messages, definitions, session, metadata, check_budget):
     allowed = {d["function"]["name"] for d in definitions}
+    # For a clear firsthand save on Laya's memory route, the user has already
+    # selected the action. Do not let auto return a chat reply instead of a call.
+    # This llama.cpp version supports string "required", not named tool objects.
+    required_save = (metadata.get("route", {}).get("tool_family") == "memory"
+                     and "memory_save" in allowed and not session.attachments
+                     and bool(tools.FIRSTHAND_SAVE.search(session.value.message.strip()))
+                     and not tools.NO_SAVE.search(session.value.message)
+                     and not tools.FORGET_REQUEST.search(session.value.message))
+    request_definitions = [tools.SPECS["memory_save"]] if required_save else definitions
+    if required_save:
+        allowed = {"memory_save"}
+    metadata["tool_save_required"] = required_save
     started, count = time.monotonic(), 0
     planning_seconds, execution_seconds, rounds = 0.0, 0.0, 0
     for round_number in range(tools.MAX_ROUNDS):
-        await check_budget(messages, metadata, definitions)
+        await check_budget(messages, metadata, request_definitions)
         planning_started = time.monotonic()
         response = await client.post("/v1/chat/completions", json={
-            "model": model, "messages": messages, "tools": definitions, "tool_choice": "auto",
+            "model": model, "messages": messages, "tools": request_definitions,
+            "tool_choice": "required" if required_save else "auto",
             "parallel_tool_calls": False, "stream": False, "temperature": 0,
             "max_tokens": 512, "chat_template_kwargs": {"enable_thinking": False},
             "reasoning_budget_tokens": 0, "reasoning_format": "deepseek", "cache_prompt": True})
