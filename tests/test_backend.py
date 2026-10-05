@@ -28,7 +28,8 @@ def test_conversation_prompt_separates_roles_and_keeps_tool_guidance_stable(clie
     assert send(client, new_conversation(client), message='What is my name?').status_code == 200
     prompt = seen[-1][0]['content']
     assert 'Keno, the ASSISTANT' in prompt and 'The USER is a different person' in prompt
-    assert 'Zain' in prompt
+    assert 'Zain' not in prompt
+    assert 'Zain' in seen[-1][-1]['content']
     assert main.system_prompt([], available_tools=['memory_save']) == main.system_prompt([], available_tools=['calculator'])
 
 
@@ -494,3 +495,49 @@ def test_opening_filter_preserves_conditions_quotes_and_incomplete_answers():
     bounded=OpeningFilter(question)
     long='To ' + 'x' * 600
     assert bounded.push(long) == long
+
+
+def test_profile_and_pinned_facts_only_used_when_relevant(client):
+    client.put('/api/v1/profile', json={'name': 'Zain', 'background': 'Engineer'})
+    client.put('/api/v1/memories/user.creator', json={'key': 'user.creator', 'content': 'I am your creator', 'pinned': True, 'category': 'fact'})
+    seen = []
+    main.app.state.llm = fake_model(seen=seen)
+    send(client, new_conversation(client), message='How can I change a phone theme?')
+    prompt = json.dumps(seen[-1])
+    assert 'Zain' not in prompt and 'Engineer' not in prompt and 'I am your creator' not in prompt
+    assert any(m['key'] == 'user.creator' for m in main.select_memories('who made you'))
+
+
+def test_creator_followup_uses_verified_name_without_planning(client):
+    client.put('/api/v1/profile', json={'name': 'Zain'})
+    conversation = new_conversation(client)
+    main.app.state.llm = fake_model(chunks=['You created this Keno app.'])
+    send(client, conversation, message='who made you', request_id='creator-question')
+    calls = []
+    main.app.state.llm = fake_model(calls=calls)
+    result = send(client, conversation, message='which is?', request_id='creator-followup').json()
+    assert result['reply'] == 'Your name is Zain.'
+    assert result['context']['followup_context'] is True
+    assert not any(path == '/v1/chat/completions' for path, _ in calls)
+
+
+def test_stock_closing_stream_matches_saved_and_preserves_specific_help(client):
+    main.app.state.llm = fake_model(chunks=['Open Settings.', '\n\nLet me ', 'know if you need further assistance.'])
+    conversation = new_conversation(client)
+    result = send(client, conversation).json()
+    assert result['reply'].strip() == 'Open Settings.'
+    assert result['context']['stock_closing_removed'] is True
+    assert send(client, conversation).json()['reply'] == result['reply']
+    from app.response_style import ResponseFilter
+    for request, text in [('help', 'Step one.\nLet me know the software version so I can find the correct menu.'), ('quote verbatim', 'Step one.\nLet me know if you need further assistance.'), ('help', 'Let me know if you need further assistance.')]:
+        f = ResponseFilter(request)
+        assert f.push(text, final=True) == text
+
+
+def test_closing_filter_preserves_middle_sentence_and_handles_trailing_newline():
+    from app.response_style import ResponseFilter
+    f = ResponseFilter('help')
+    assert (f.push('Useful answer.\nLet me know if you need further assistance.\n') + f.push('', final=True)).strip() == 'Useful answer.'
+    f = ResponseFilter('help')
+    text = 'Useful answer.\nLet me know if you need further assistance.\nSpecific further information.'
+    assert f.push(text, final=True) == text

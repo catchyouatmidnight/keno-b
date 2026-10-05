@@ -42,3 +42,54 @@ class OpeningFilter:
     def release(self):
         text, self.buffer, self.active = self.buffer, '', False
         return text
+
+
+class ClosingFilter:
+    """Hold only a potential stock closing at a line boundary, not the answer."""
+    PREFIXES = ("let me know", "if you're still having trouble")
+    STOCK = re.compile(r"(?:Let me know if you (?:need (?:any )?(?:further assistance|more help)|have (?:any )?(?:other |further )?questions)|If you're still having trouble, let me know and I can guide you further)[.!]?", re.I)
+
+    def __init__(self, enabled=True):
+        self.enabled, self.start, self.buffer = enabled, True, ''
+        self.content_seen, self.removed = False, False
+
+    def push(self, text, final=False):
+        if not self.enabled:
+            return text
+        output = ''
+        for char in text:
+            if self.start and self.content_seen:
+                self.buffer += char
+                candidate = self.buffer.strip().casefold()
+                possible = not candidate or any(p.startswith(candidate) or candidate.startswith(p) for p in self.PREFIXES)
+                if possible and (char != '\n' or self.STOCK.fullmatch(self.buffer.strip())) and len(self.buffer) <= 256:
+                    continue
+                output += self.buffer
+                self.content_seen |= bool(self.buffer.strip())
+                self.buffer = ''
+                self.start = char == '\n'
+            else:
+                output += char
+                self.content_seen |= bool(char.strip())
+                self.start = char == '\n'
+        if final and self.buffer:
+            if self.STOCK.fullmatch(self.buffer.strip()):
+                self.removed = True
+            else:
+                output += self.buffer
+            self.buffer = ''
+        return output
+
+
+class ResponseFilter:
+    def __init__(self, request, enabled=True):
+        self.opening = OpeningFilter(request, enabled)
+        safe = enabled and not re.search(r'\b(?:verbatim|quote|translate|translation|json|code|html|python)\b', request, re.I)
+        self.closing = ClosingFilter(safe)
+
+    @property
+    def removed(self):
+        return self.opening.removed
+
+    def push(self, text, final=False):
+        return self.closing.push(self.opening.push(text, final), final)

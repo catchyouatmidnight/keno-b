@@ -425,13 +425,15 @@ async def delete_attachment(attachment_id: str):
 
 def select_memories(message):
     words = set(re.findall(r"\w+", message.casefold())) - documents.QUERY_STOP_WORDS
+    if re.search(r"\b(?:creator|who made you|who created you|who built you)\b", message, re.I):
+        words.update({"creator", "created", "name"})
     candidates = memories(q="", limit=500)
     def score(m):
         return len(words & set(re.findall(r"\w+", (m["key"] + " " + m["content"]).casefold())))
     ranked = sorted(candidates, key=lambda m: (bool(m["pinned"]), score(m)), reverse=True)
     # Names are pinned for durable identity, not to decorate every answer.
     # Keep always-applicable pinned preferences, but retrieve names by relevance.
-    return [m for m in ranked if (m["pinned"] and m["key"] != "user.name") or score(m) > 0][:8]
+    return [m for m in ranked if (m["pinned"] and (m["category"] == "preference" or not m["key"].startswith("user."))) or score(m) > 0][:8]
 
 
 def history_answer_for_prompt(user_text, answer):
@@ -443,7 +445,7 @@ def history_answer_for_prompt(user_text, answer):
 
 
 def system_prompt(selected, has_uploads=False, available_tools=None):
-    identity, profile = setting("identity"), setting("profile")
+    identity = setting("identity")
     tool_settings = setting("tools")
     # Keep the instruction prefix identical across tool families. The native
     # tools schema remains the authority for which functions are callable.
@@ -459,6 +461,8 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
             "Use profile and saved memories only when relevant to the current question. Never preface unrelated answers with the user's name or personal facts. "
             "For device instructions, do not invent exact menu labels or paths; if unsure, say so and ask for the software version or a screenshot. "
             "Use natural language unless JSON is requested. Never invent weather or tool success. "
+            "Distinguish supplied evidence from your own knowledge. Exact device menu paths and current facts need verification; if no source is available, label uncertainty instead of presenting a guess as verified. "
+            "For short follow-ups, resolve the subject from the immediately preceding exchange; do not repeat a different earlier task. "
             f"Keno has persistent SQLite memory across chats/restarts on this server. Automatic memory is {'enabled' if tool_settings['automatic_memory'] else 'off; explicit save requests still work'}. "
             "Only successful memory_save confirms a save; unsaved chat facts may not transfer. Explain failures honestly. "
             "Acknowledge the user as creator of this Keno app when stated. "
@@ -473,8 +477,7 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
             "Do not claim to have visually reviewed every page. "
             "If evidence is insufficient, briefly identify the missing page or detail.\n" if has_uploads else "")
             + f"Preferred response examples: {identity['response_examples']}\n"
-            f"Tool settings: {json.dumps(tool_settings)}\n"
-            f"User profile JSON: {json.dumps(profile, ensure_ascii=False)}")
+            f"Tool settings: {json.dumps(tool_settings)}")
 
 
 async def fit_context(value, route=None, attachments=None):
@@ -489,7 +492,15 @@ async def fit_context(value, route=None, attachments=None):
     if route["thinking"] and route.get("uncertain"):
         thinking_tokens = UNCERTAIN_THINKING_BUDGET
     image_reserve = len(images) * (IMAGE_TOKEN_LIMIT + 64)
-    selected = select_memories(value.message)
+    retrieval_query = value.message
+    with db() as c:
+        previous = c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 1", (value.conversation_id,)).fetchone()
+    followup = bool(re.fullmatch(r"\s*(?:which is|who is that|who exactly|what about that|tell me more|continue)\s*[?.!]*", value.message, re.I))
+    if followup and previous:
+        retrieval_query += " " + previous[0][:300]
+    selected = select_memories(retrieval_query)
+    profile = setting("profile")
+    relevant_profile = {k: v for k, v in profile.items() if v and (k == "preferences" or (k == "name" and re.search(r"\b(?:name|creator|made you)\b", retrieval_query, re.I)) or (k == "background" and re.search(r"\b(?:my|me|career|work|background)\b", retrieval_query, re.I)))}
     with db() as c:
         recent, older = history.context(c, value.conversation_id, value.message)
     while True:
@@ -500,6 +511,8 @@ async def fit_context(value, route=None, attachments=None):
         # Changing retrieval belongs after the stable instructions and history,
         # so it does not invalidate their cached prefix on every new question.
         reference = {}
+        if relevant_profile:
+            reference["user_profile"] = relevant_profile
         if selected:
             reference["memories"] = selected
         if older["compact_notes"] or older["relevant_older_excerpts"]:
@@ -523,7 +536,7 @@ async def fit_context(value, route=None, attachments=None):
             return messages, {"memory_keys": [m["key"] for m in selected], "history_turns": len(recent), "prompt_tokens": count,
                               "image_token_reserve": image_reserve, "route": route, "thinking_budget": thinking_tokens,
                               "available_tools": [d["function"]["name"] for d in definitions],
-                              "history_summary": bool(older["compact_notes"]), "retrieved_history": len(older["relevant_older_excerpts"]),
+                              "followup_context": followup, "history_summary": bool(older["compact_notes"]), "retrieved_history": len(older["relevant_older_excerpts"]),
                               "attachment_ids": [a["id"] for a in attachments],
                               "document_sources": [{k: c[k] for k in ("attachment_id", "name", "page", "chunk")} for c in excerpts],
                               "visual_sources": visual_sources, "document_coverage": "selected excerpts/pages" if attachments else "none"}
@@ -593,6 +606,12 @@ def user_name_reply(value, messages, attachments):
     question = r"(?:what(?: is|'s|s) my name|do you know my name)\??"
     declaration = r"my name is ([^.!?\n]{1,80})[.!]"
     text = value.message.strip()
+    # Resolve only an unambiguous creator/name follow-up from the last USER
+    # exchange. Never use an assistant's invented name as identity evidence.
+    if re.fullmatch(r"(?:which is|who is that|who exactly)[?.!]*", text, re.I):
+        prior = [m["content"] for m in messages[:-1] if m["role"] == "user" and isinstance(m["content"], str)]
+        if prior and re.fullmatch(r"(?:who (?:made|created|built) you|what(?: is|'s|s) my name)[?.!]*", prior[-1].strip(), re.I):
+            text = "what is my name"
     match = re.fullmatch(declaration + r"\s*" + question, text, re.I)
     if match:
         name = match.group(1).strip()
@@ -634,7 +653,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
     first_delta = None
     first_reasoning = None
     first_content = None
-    opening = response_style.OpeningFilter(value.message, enabled=not attachments)
+    opening = response_style.ResponseFilter(value.message, enabled=not attachments)
     session = tools.ToolSession(value, attachments or [], setting("tools"), db, now, app.state.lookup)
     try:
         metadata["max_tokens"] = value.max_tokens
@@ -736,7 +755,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                     yield "delta", {"text": tail}
         if not finished or not answer.strip():
             raise ValueError("Model stream ended without a completed answer")
-        metadata.update(repeated_opening_removed=opening.removed,
+        metadata.update(repeated_opening_removed=opening.removed, stock_closing_removed=opening.closing.removed,
                         elapsed_seconds=round(time.monotonic() - start, 2), finish_reason=reason,
                         total_seconds=round(time.monotonic() - request_started, 3),
                         truncated=reason == "length", max_tokens=value.max_tokens)
