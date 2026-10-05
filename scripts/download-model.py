@@ -17,6 +17,11 @@ FAST_REVISION = "f2d6f9ca53a254cc379437c49e4b2eb447f779df"
 FAST_SHA256 = "ac2d97712095a558e31573f62f466a3f9d93990898b0ec79d7c974c1780d524a"
 FAST_URL = f"https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/{FAST_REVISION}/{FAST_MODEL}"
 
+TEXT_MODEL = "Qwen3-1.7B-Q4_K_M.gguf"
+TEXT_REVISION = "bd59ef4"  # upstream file revision; checksum pins the exact bytes
+TEXT_SHA256 = "b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897"
+TEXT_URL = f"https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/{TEXT_REVISION}/{TEXT_MODEL}"
+
 
 def digest(path):
     result = hashlib.sha256()
@@ -85,14 +90,14 @@ def download_laya():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=["0.6b", "2b", "4b"], default="2b")
+    parser.add_argument("--model", choices=["0.6b", "1.7b", "2b", "4b"], default="2b")
     parser.add_argument("--vision", action="store_true")
     parser.add_argument("--laya", action="store_true")
     args = parser.parse_args()
     if args.vision and args.model != "2b":
         raise SystemExit("This vision profile requires the matching Qwen 2B model")
     (ROOT / "models").mkdir(exist_ok=True)
-    needed = {"0.6b": 397_000_000, "2b": 1_280_000_000, "4b": 2_740_000_000}[args.model]
+    needed = {"0.6b": 397_000_000, "1.7b": 1_110_000_000, "2b": 1_280_000_000, "4b": 2_740_000_000}[args.model]
     needed += 668_000_000 if args.vision else 0
     needed += 750_000_000 if args.laya else 0
     # Existing files can be verified with no extra space. This check is advisory;
@@ -101,6 +106,8 @@ def main():
     try:
         if args.model == "0.6b":
             download(ROOT / "models" / FAST_MODEL, FAST_URL, FAST_SHA256, maximum=500_000_000)
+        elif args.model == "1.7b":
+            download(ROOT / "models" / TEXT_MODEL, TEXT_URL, TEXT_SHA256, maximum=1_300_000_000)
         elif args.model == "4b":
             download(ROOT / "models" / MODEL, URL, SHA256)
         else:

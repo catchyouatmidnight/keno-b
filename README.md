@@ -238,6 +238,28 @@ Version 0.3 automatically migrates schema 1/2 to 3 while preserving personal dat
 
 ## Change the model
 
+### Try Qwen3 1.7B (text only)
+
+This opt-in profile uses Unsloth's `Qwen3-1.7B-Q4_K_M.gguf`, approximately 1.11 GB, at file revision `bd59ef4`. Download and activation both verify SHA256 `b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897`. Existing model files and personal data are preserved. It disables the vision projector, sets context to 4096, and retains your CPU threads, API key, port and Laya's automatic thinking/tool decisions. No manual thinking toggle is added. Its latency and answer/tool quality have not been benchmarked on your server.
+
+```bash
+bash scripts/backup.sh
+python3 scripts/download-model.py --model 1.7b
+python3 scripts/enable-fast.py --model 1.7b
+docker compose up -d --no-deps --force-recreate llm backend
+```
+
+After an application update, rebuild the backend separately with `docker compose up -d --build --no-deps --force-recreate backend`. The model switch itself does not require a rebuild. Fresh installations also need `bash scripts/setup.sh` and the downloader's `--laya` option.
+
+Check `docker compose ps` and `docker compose logs --tail=60 llm`; wait for the model to be healthy before chatting. Use `bash scripts/timings.sh` to compare complete responses. A smaller model does not guarantee a speed improvement; the first request after recreation has a cold prompt cache. A fair comparison must use matching context, threads, prompts, history and tool routing.
+
+Rollback to the previously installed 2B vision profile:
+
+```bash
+python3 scripts/enable-analysis.py
+docker compose up -d --no-deps --force-recreate llm backend
+```
+
 ### Try Qwen3 0.6B
 
 This opt-in text profile downloads Unsloth's Qwen3-0.6B Q4_K_M GGUF (approximately 397 MB), pinned to revision `f2d6f9ca53a254cc379437c49e4b2eb447f779df` and verified by SHA256. It keeps the existing Laya router and automatic thinking decisions, uses a 4096-token context, and disables the vision projector. Speed and answer/tool quality must be measured on your server; the smaller model is not a promised latency fix.

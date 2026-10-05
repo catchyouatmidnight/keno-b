@@ -9,7 +9,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_fast_switch_preserves_data_and_rejects_unverified_model(tmp_path, monkeypatch):
+@pytest.mark.parametrize("model_size,prefix,filename", [("0.6b", "FAST", "Qwen3-0.6B-Q4_K_M.gguf"), ("1.7b", "TEXT", "Qwen3-1.7B-Q4_K_M.gguf")])
+def test_fast_switch_preserves_data_and_rejects_unverified_model(tmp_path, monkeypatch, model_size, prefix, filename):
     script = runpy.run_path(str(ROOT / "scripts" / "enable-fast.py"))
     env = tmp_path / ".env"
     original = "# installation\nKENO_API_KEY=keep-local-key\nPORT=18081\nCPU_THREADS=4\nMODEL_FILE=old\nMODEL_FILE=duplicate\nVISION_ENABLED=true\nCONTEXT_SIZE=8192\n"
@@ -17,24 +18,24 @@ def test_fast_switch_preserves_data_and_rejects_unverified_model(tmp_path, monke
     models = tmp_path / "models"
     (models / "laya").mkdir(parents=True)
     (models / "laya" / "keno-manifest.json").write_text("{}")
-    model = models / "Qwen3-0.6B-Q4_K_M.gguf"
+    model = models / filename
     model.write_bytes(b"fixture")
     data = tmp_path / "data"
     data.mkdir()
     (data / "keno.db").write_bytes(b"personal database")
     with pytest.raises(SystemExit, match="checksum"):
-        script["configure"](tmp_path)
+        script["configure"](tmp_path, model_size=model_size)
     assert env.read_text() == original
     real_run = runpy.run_path
     def fixture_assets(path):
         assets = real_run(path)
-        assets["FAST_SHA256"] = hashlib.sha256(b"fixture").hexdigest()
+        assets[prefix + "_SHA256"] = hashlib.sha256(b"fixture").hexdigest()
         return assets
     monkeypatch.setattr(runpy, "run_path", fixture_assets)
-    script["configure"](tmp_path)
+    script["configure"](tmp_path, model_size=model_size)
     text = env.read_text()
     assert text.count("MODEL_FILE=") == 1
-    assert "MODEL_FILE=Qwen3-0.6B-Q4_K_M.gguf" in text
+    assert f"MODEL_FILE={filename}" in text
     assert "VISION_ENABLED=false" in text
     assert "CONTEXT_SIZE=4096" in text
     assert "KENO_API_KEY=keep-local-key" in text and "PORT=18081" in text
