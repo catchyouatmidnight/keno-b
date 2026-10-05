@@ -27,7 +27,7 @@ for index, (raw,) in enumerate(rows, 1):
     for key in ("context_prepare_seconds", "model_first_delta_seconds",
                 "model_first_reasoning_seconds", "hidden_reasoning_seconds", "model_first_token_seconds",
                 "first_token_seconds", "total_seconds", "elapsed_seconds",
-                "tool_seconds", "tool_model_seconds", "tool_execution_seconds", "tool_planning_rounds",
+                "tool_seconds", "tool_model_seconds", "tool_execution_seconds", "tool_planning_rounds", "tool_planning_mode", "tool_save_required",
                 "answer_source", "prompt_tokens", "history_turns", "history_summary", "retrieved_history", "thinking_budget", "finish_reason"):
         output[key] = data.get(key)
     print(json.dumps(output, indent=2))

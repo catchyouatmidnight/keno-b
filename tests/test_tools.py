@@ -47,7 +47,7 @@ def test_planner_reuse_cannot_claim_unsaved_memory_or_skip_deep_thinking(client)
     requests = []
     main.app.state.laya = fake_router(family='memory')
     main.app.state.llm = native_model(['Saved your name Zain.'], requests=requests)
-    response = send(client, new_conversation(client), message='Remember that my name is Zain.').json()
+    response = send(client, new_conversation(client), message='Remember that my favorite color is blue.').json()
     assert response['context']['answer_source'] == 'memory_guard'
     assert "hasn't been saved" in response['reply']
     assert client.get('/api/v1/memories').json() == []
@@ -399,18 +399,15 @@ def test_explicit_save_requires_validated_tool_and_survives_new_chat(client):
     requests=[]
     main.app.state.laya = fake_router(family='memory')
     client.put('/api/v1/tools/settings', json={'automatic_memory':False})
-    main.app.state.llm = native_model([[('memory_save', {'key':'user.name', 'quote':'my name is Amira', 'category':'fact'})]], requests=requests)
-    saved = send(client, new_conversation(client), message='Remember that my name is Amira.').json()
+    main.app.state.llm = native_model([[('memory_save', {'key':'user.project', 'quote':'my project is Amira', 'category':'fact'})]], requests=requests)
+    saved = send(client, new_conversation(client), message='Remember that my project is Amira.').json()
     assert saved['context']['tool_save_required'] is True
     assert saved['context']['tool_calls'][0]['status'] == 'complete'
-    assert saved['reply'].startswith('Saved: my name is Amira')
+    assert saved['reply'].startswith('Saved: my project is Amira')
     payload = next(body for path,body in requests if path == '/v1/chat/completions')
     assert payload['tool_choice'] == 'required'
     assert [d['function']['name'] for d in payload['tools']] == ['memory_save']
-    main.app.state.laya = fake_router(family='none')
-    main.app.state.llm = fake_model()
-    recalled = send(client, new_conversation(client), request_id='forced-save-recall-001', message='What is my name?').json()
-    assert recalled['reply'] == 'Your name is Amira.'
+    assert client.get('/api/v1/memories').json()[0]['content'] == 'my project is Amira'
 
 
 def test_required_save_preserves_quote_validation_and_other_tool_choices(client):
@@ -418,7 +415,7 @@ def test_required_save_preserves_quote_validation_and_other_tool_choices(client)
     main.app.state.laya = fake_router(family='memory')
     bad = [('memory_save', {'key':'user.name', 'quote':'Invented fact', 'category':'fact'})]
     main.app.state.llm = native_model([bad,bad], requests=requests)
-    result = send(client, new_conversation(client), message='Remember that my name is Amira.').json()
+    result = send(client, new_conversation(client), message='Remember that my project is Amira.').json()
     assert all(event['status'] == 'failed' for event in result['context']['tool_calls'])
     assert client.get('/api/v1/memories').json() == []
     assert "hasn't been saved" in result['reply']
@@ -429,3 +426,38 @@ def test_required_save_preserves_quote_validation_and_other_tool_choices(client)
     assert payload['tool_choice'] == 'auto'
     assert result['context']['tool_save_required'] is False
     assert client.get('/api/v1/memories').json() == []
+
+
+def test_explicit_name_save_skips_inference_corrects_and_replays(client):
+    requests=[]
+    main.app.state.laya = fake_router(family='memory')
+    client.put('/api/v1/tools/settings', json={'automatic_memory':False})
+    main.app.state.llm = native_model([], requests=requests)
+    conversation = new_conversation(client)
+    saved = send(client, conversation, message='Remember that my name is Zain.').json()
+    assert saved['context']['tool_planning_mode'] == 'explicit_name_save'
+    assert saved['context']['tool_planning_rounds'] == 0
+    assert saved['context']['tool_model_seconds'] == 0
+    assert saved['context']['memory_changes'] == [{'action':'save', 'key':'user.name'}]
+    assert saved['context']['tool_calls'] == [{'name':'memory_save', 'status':'complete', 'index':1, 'memory_key':'user.name'}]
+    assert saved['reply'].startswith('Saved: my name is Zain.')
+    assert not any(path == '/v1/chat/completions' for path,body in requests)
+    assert send(client, conversation, message='Remember that my name is Zain.').json()['reply'] == saved['reply']
+    changed = send(client, conversation, request_id='direct-name-correction', message='Save my name is Amira.').json()
+    assert changed['context']['tool_planning_rounds'] == 0
+    assert len(client.get('/api/v1/memories').json()) == 1
+    main.app.state.laya = fake_router(family='none')
+    recalled = send(client, new_conversation(client), request_id='direct-name-recall', message='What is my name?').json()
+    assert recalled['reply'] == 'Your name is Amira.'
+    assert not any(path == '/v1/chat/completions' for path,body in requests)
+
+
+def test_explicit_name_parser_leaves_ambiguous_and_negated_requests_to_planner():
+    from app.tools import explicit_name_save
+    for text in ['My name is Zain.', 'Remember my name is Zain and analyze this',
+                 'Remember my name is Zain, then calculate 2+2',
+                 'Remember my name is Zain but do not save it.',
+                 'Remember my name is 123', 'save', 'Remember that my project is Keno.']:
+        assert explicit_name_save(text) is None
+    assert explicit_name_save('Please remember that my name is Anne-Marie O’Neill.') == {
+        'key':'user.name', 'quote':'my name is Anne-Marie O’Neill', 'category':'fact'}

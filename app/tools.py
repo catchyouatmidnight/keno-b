@@ -17,6 +17,25 @@ FOLLOWUP_SAVE = re.compile(r"^(?:please\s+)?(?:save|remember|simpan|ingat)(?:\s+
 FIRSTHAND_SAVE = re.compile(r"^(?:please\s+)?(?:remember|save|simpan|ingat)\s+(?:that\s+)?(?:my\b|i\b|i'm\b|the\s+fact\b|nama\s+saya\b|saya\b)", re.I)
 
 
+def explicit_name_save(text):
+    """Extract only a complete, explicit name-save command; preserve its quote."""
+    if NO_SAVE.search(text) or FORGET_REQUEST.search(text):
+        return None
+    match = re.fullmatch(
+        r"(?:please\s+)?(?:remember|save)\s+(?:that\s+)?"
+        r"(?P<quote>my\s+name\s+is\s+(?P<name>[^.!?\n]{1,80}))[.!]?",
+        text.strip(), re.I)
+    if not match:
+        return None
+    name = match.group('name').strip()
+    words = name.split()
+    if not 1 <= len(words) <= 4 or any(w.casefold() in {'and', 'or', 'then', 'but', 'dan', 'atau'} for w in words):
+        return None
+    if not all(c.isalpha() or c in " -'’" for c in name) or not any(c.isalpha() for c in name):
+        return None
+    return {'key': 'user.name', 'quote': match.group('quote').rstrip(), 'category': 'fact'}
+
+
 class ToolValidationError(ValueError):
     pass
 

@@ -23,7 +23,19 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     metadata["tool_save_required"] = required_save
     started, count = time.monotonic(), 0
     planning_seconds, execution_seconds, rounds = 0.0, 0.0, 0
-    for round_number in range(tools.MAX_ROUNDS):
+    direct_save = tools.explicit_name_save(session.value.message) if required_save else None
+    metadata['tool_planning_mode'] = 'explicit_name_save' if direct_save else 'model'
+    if direct_save:
+        # Keep the normal evidence validation, staging and answer transaction.
+        event = {'name': 'memory_save', 'status': 'running', 'index': 1}
+        yield 'tool', event
+        execution_started = time.monotonic()
+        result = await session.execute('memory_save', direct_save)
+        execution_seconds = time.monotonic() - execution_started
+        event = {**event, 'status': 'complete', 'memory_key': result['key']}
+        session.events.append(event)
+        yield 'tool', event
+    for round_number in range(0 if direct_save else tools.MAX_ROUNDS):
         await check_budget(messages, metadata, request_definitions)
         planning_started = time.monotonic()
         response = await client.post("/v1/chat/completions", json={
