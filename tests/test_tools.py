@@ -43,7 +43,7 @@ def test_quick_planner_answer_uses_one_inference_and_preserves_replay(client):
     assert sum(path == '/v1/chat/completions' for path, _ in requests) == 1
 
 
-def test_planner_reuse_cannot_claim_unsaved_memory_or_skip_deep_thinking(client):
+def test_planner_reuse_cannot_claim_unsaved_memory_and_honors_deep_thinking(client):
     requests = []
     main.app.state.laya = fake_router(family='memory')
     main.app.state.llm = native_model(['Saved your name Zain.'], requests=requests)
@@ -55,9 +55,14 @@ def test_planner_reuse_cannot_claim_unsaved_memory_or_skip_deep_thinking(client)
     main.app.state.laya = fake_router(family='memory', thinking='deep')
     main.app.state.llm = native_model(['A quick guess.'], requests=requests)
     response = send(client, new_conversation(client), request_id='planner-deep-001', message='Analyze this carefully.').json()
-    assert response.get('reply') == 'Hello Zain', response
-    assert sum(path == '/v1/chat/completions' for path, _ in requests) == 2
-    assert response['context'].get('answer_source') != 'tool_planner'
+    assert response.get('reply') == 'A quick guess.', response
+    payloads = [body for path, body in requests if path == '/v1/chat/completions']
+    assert len(payloads) == 1
+    assert payloads[0]['chat_template_kwargs']['enable_thinking'] is True
+    assert payloads[0]['reasoning_budget_tokens'] == 384
+    assert payloads[0]['max_tokens'] == 896
+    assert response['context']['answer_source'] == 'tool_planner'
+    assert response['context']['hidden_reasoning_seconds'] is None
     requests.clear()
     main.app.state.laya = fake_router(family='memory')
     main.app.state.llm = native_model(['{"name":"Zain"}'], requests=requests)

@@ -25,6 +25,9 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     planning_seconds, execution_seconds, rounds = 0.0, 0.0, 0
     direct_save = tools.explicit_name_save(session.value.message) if required_save else None
     metadata['tool_planning_mode'] = 'explicit_name_save' if direct_save else 'model'
+    planner_thinking = bool(metadata.get('route', {}).get('thinking', False)) and not required_save
+    planner_budget = metadata.get('thinking_budget', 0) if planner_thinking else 0
+    metadata['tool_thinking_budget'] = planner_budget
     if direct_save:
         # Keep the normal evidence validation, staging and answer transaction.
         event = {'name': 'memory_save', 'status': 'running', 'index': 1}
@@ -42,8 +45,8 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
             "model": model, "messages": messages, "tools": request_definitions,
             "tool_choice": "required" if required_save else "auto",
             "parallel_tool_calls": False, "stream": False, "temperature": 0,
-            "max_tokens": 512, "chat_template_kwargs": {"enable_thinking": False},
-            "reasoning_budget_tokens": 0, "reasoning_format": "deepseek", "cache_prompt": True})
+            "max_tokens": 512 + planner_budget, "chat_template_kwargs": {"enable_thinking": planner_thinking},
+            "reasoning_budget_tokens": planner_budget, "reasoning_format": "deepseek", "cache_prompt": True})
         response.raise_for_status()
         body = response.json()
         planning_seconds += time.monotonic() - planning_started
@@ -60,9 +63,10 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
             raise ValueError("Model returned malformed tool calls")
         if not calls:
             content = message.get("content")
-            # A complete quick answer from the first pass needs no second inference.
+            # A complete answer from the first pass needs no second inference.
+            # This pass already honors Laya's selected effort and budget.
             # Keep it transient: generate() applies memory/weather guards first.
-            if count == 0 and not metadata.get("route", {}).get("thinking", False) and choice.get("finish_reason") == "stop" and isinstance(content, str) and content.strip() and not content.lstrip().startswith(("{", "[", "```")):
+            if count == 0 and not required_save and choice.get("finish_reason") == "stop" and isinstance(content, str) and content.strip() and not content.lstrip().startswith(("{", "[", "```")):
                 if len(content) > 100_000:
                     raise ValueError("Model output exceeded limit")
                 metadata["_planner_reply"] = content

@@ -503,7 +503,7 @@ async def fit_context(value, route=None, attachments=None):
         tokenized = await app.state.llm.post("/tokenize", json={"content": formatted.json()["prompt"], "add_special": True})
         tokenized.raise_for_status()
         count = len(tokenized.json()["tokens"])
-        reserved_output = max(512 if definitions else 0, value.max_tokens + thinking_tokens)
+        reserved_output = max(512 + thinking_tokens if definitions else 0, value.max_tokens + thinking_tokens)
         if count + image_reserve + reserved_output + 128 <= CONTEXT_SIZE:
             if images:
                 messages[-1]["content"] = [{"type": "text", "text": text}] + [{"type": "image_url", "image_url": {"url": image}} for image in images]
@@ -543,7 +543,8 @@ async def check_tool_budget(messages, metadata, definitions):
         tokenized = await app.state.llm.post("/tokenize", json={"content": formatted.json()["prompt"], "add_special": True})
         tokenized.raise_for_status()
         count = len(tokenized.json()["tokens"])
-        reserve = max(512 if definitions else 0, metadata.get("max_tokens", 512) + metadata.get("thinking_budget", 0))
+        reserve = max(512 + metadata.get("thinking_budget", 0) if definitions else 0,
+                      metadata.get("max_tokens", 512) + metadata.get("thinking_budget", 0))
         if count + metadata.get("image_token_reserve", 0) + reserve + 128 <= CONTEXT_SIZE:
             metadata["prompt_tokens"] = count
             return
@@ -654,7 +655,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
             metadata["answer_source"] = "tool_planner"
             # The planner is non-streaming, so individual token timings are unknown.
             metadata["first_token_seconds"] = round(time.monotonic() - request_started, 3)
-            metadata["hidden_reasoning_seconds"] = 0
+            metadata["hidden_reasoning_seconds"] = None if metadata.get("tool_thinking_budget", 0) else 0
             yield "timing", {"first_token_seconds": metadata["first_token_seconds"]}
             yield "delta", {"text": answer}
         else:
