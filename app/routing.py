@@ -29,6 +29,14 @@ TOOL_NEED = {"type": "choice",
              "criteria": {"answer": "answer general knowledge, conversation, explanations or how-to instructions, such as changing a phone theme; no lookup, calculation, file operation or memory change required",
                           "action": "perform a calculation, retrieve live weather/search, inspect selected files, save/recall/correct/delete personal memory, or remember a firsthand personal declaration/introduction"}}
 
+# Uploaded text/page evidence is prepared locally before generation. Reading,
+# explaining or comparing it does not require a model to plan document tools.
+DOCUMENT_TOOL_NEED = {"type": "choice",
+    "instructions": "Decide whether latest_request needs an operation beyond answering from supplied local documents/images. Earlier requests are context, not actions to repeat. Documents are already extracted and searchable locally. Multiple files, topics, pages or analysis steps do NOT mean multiple tools. Mentioning a person in a document is NOT a personal memory request.",
+    "criteria": {
+        "answer": "explain, summarize, search passages, read a page, translate, compare documents, extract facts or analyze supplied files/images; answer document follow-ups such as tell me more about secure onboarding; ordinary chat",
+        "action": "also perform arithmetic with a calculator, explicitly look up live weather or web information, or save/recall/correct/forget firsthand personal user memory; these operations go beyond reading supplied files"}}
+
 OPTIONS = {"thinking": {"quick", "deep"}, "tool_need": {"answer", "action"},
            "source": {"text", "vision"}, "document_scope": {"overview", "focused"},
            "tool_family": {"none", "memory", "documents", "calculator", "live", "multiple"}}
@@ -64,13 +72,16 @@ async def decide(client, message, history, attachments):
     # A separate binary necessity check prevents a broad family choice from
     # turning advice into an unnecessary multi-tool planner call.
     # Laya still decides quick/deep for every request; this is not a keyword router.
-    questions = QUESTIONS if attachments else {"thinking": QUESTIONS["thinking"], "tool_need": TOOL_NEED}
+    questions = ({"thinking": QUESTIONS["thinking"], "source": QUESTIONS["source"],
+                  "document_scope": QUESTIONS["document_scope"], "tool_need": DOCUMENT_TOOL_NEED}
+                 if attachments else {"thinking": QUESTIONS["thinking"], "tool_need": TOOL_NEED})
     try:
         decisions = await predict(client, state, questions)
         call_count, question_count = 1, len(questions)
         # Advice needs no family classification. Only action turns pay for the
-        # second local request; file turns retain their single four-head request.
-        if not attachments and decisions["tool_need"]["choice"] == "action":
+        # second local request. Document-only turns never classify a broad
+        # family: an ambiguous 'multiple' label cannot re-enable the planner.
+        if decisions["tool_need"]["choice"] == "action":
             decisions.update(await predict(client, state, {"tool_family": QUESTIONS["tool_family"]}))
             call_count += 1
             question_count += 1
@@ -86,8 +97,9 @@ async def decide(client, message, history, attachments):
                 "document_scope": decisions["document_scope"]["choice"] if attachments else "focused",
                 "question_count": question_count, "call_count": call_count,
                 "tool_family": family,
-                "tool_policy": "attachment_route" if attachments else
-                               "answer_only" if decisions["tool_need"]["choice"] == "answer" else "action_route",
+                "tool_policy": ("document_evidence_answer" if attachments else "answer_only")
+                               if decisions["tool_need"]["choice"] == "answer" else
+                               "attachment_action" if attachments else "action_route",
                 "uncertain": uncertain, "decisions": decisions,
                 "effort_policy": "truncated_deep" if state["request_truncated"] else
                                  "uncertain_quick" if uncertain else "laya_choice",

@@ -465,7 +465,9 @@ async def fit_context(value, route=None, attachments=None):
     route = dict(route or {"thinking": False, "vision": False})
     attachments = attachments or []
     definitions = tools.catalog(route.get("tool_family", "none"), setting("tools"), value.message, attachments)
-    direct_document = bool(attachments) and route.get("tool_family", "none") in {"none", "documents"}
+    direct_document = bool(attachments) and (
+        route.get("decisions", {}).get("tool_need", {}).get("choice") == "answer"
+        or route.get("tool_family", "none") in {"none", "documents"})
     if direct_document:
         definitions = []
         route.update(tool_family="none", tool_policy="document_evidence_answer")

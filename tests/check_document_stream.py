@@ -39,6 +39,29 @@ assert docs.check_citations('business.pdf p.9', focused, [file])['status'] == 'p
 assert docs.check_citations('business.pdf p.2', focused, [file])['status'] == 'invalid'
 
 async def run():
+    routing_scope = {'math': __import__('math'), 'time': time, 'HTTPException': HTTPException,
+                     'httpx': NS(HTTPError=RuntimeError)}
+    tree = ast.parse((ROOT / 'app/routing.py').read_text())
+    exec(compile(ast.Module(body=[n for n in tree.body if not isinstance(n, (ast.Import, ast.ImportFrom))], type_ignores=[]), 'routing.py', 'exec'), routing_scope)
+    class Router:
+        def __init__(self, need): self.need = need; self.requests = []
+        async def post(self, path, json):
+            self.requests.append(json)
+            choices = {'thinking': 'quick', 'source': 'text', 'document_scope': 'focused',
+                       'tool_need': self.need, 'tool_family': 'multiple'}
+            # A broad family classifier would choose multiple for this request.
+            answers = {k: {'choice': choices[k], 'answer_confidence': .9} for k in json['questions']}
+            return NS(raise_for_status=lambda: None, json=lambda: {'answers': answers})
+    descriptor = {**file, 'characters': 11000}
+    router = Router('answer')
+    route = await routing_scope['decide'](router, 'tell me more about secure onboarding', 'Earlier document summary', [descriptor])
+    assert route['tool_family'] == 'none' and route['tool_policy'] == 'document_evidence_answer'
+    assert len(router.requests) == 1 and route['question_count'] == 4
+    assert not any('tool_family' in r['questions'] for r in router.requests)
+    action_router = Router('action')
+    action_route = await routing_scope['decide'](action_router, 'Compare this document and search the web for current requirements', '', [descriptor])
+    assert action_route['tool_family'] == 'multiple' and action_route['tool_policy'] == 'attachment_action'
+    assert len(action_router.requests) == 2 and action_route['question_count'] == 5
     connection = sqlite3.connect(':memory:')
     connection.executescript("CREATE TABLE turns(request_id TEXT,conversation_id TEXT,user_text TEXT,assistant_text TEXT,status TEXT,metadata TEXT); INSERT INTO turns VALUES ('r','c','old topic','old answer','complete','{}');")
     class Client:
@@ -90,7 +113,9 @@ async def run():
     ns['agent'] = NS(plan=forbidden)
     main = functions('app/main.py', ['fit_context', 'generate'], ns)
     value = NS(message='tell me more about secure onboarding', conversation_id='c', request_id='r', max_tokens=512)
-    messages, meta = await main.fit_context(value, {'tool_family': 'documents', 'document_scope': 'focused', 'thinking': False, 'vision': False}, [file])
+    # Even a conflicting family label cannot override answer-only necessity.
+    route['tool_family'] = 'multiple'
+    messages, meta = await main.fit_context(value, route, [file])
     assert meta['available_tools'] == [] and meta['history_turns'] == 0
     assert meta['document_answer_mode'] == 'direct_stream'
     assert meta['route']['tool_policy'] == 'document_evidence_answer'
@@ -106,5 +131,5 @@ async def run():
     assert events[-1][0] == 'done' and events[-1][1]['context']['citation_check']['status'] == 'present'
     assert connection.execute('SELECT status FROM turns').fetchone()[0] == 'complete'
     assert not lock.locked()
-    print('Focused/broad/page retrieval, page validation, citations, planner bypass, partial streaming before commit and final persistence checks passed.')
+    print('Document necessity gate, conflicting multiple label, mixed actions, focused/broad/page retrieval, citations, planner bypass, partial streaming and final persistence checks passed.')
 asyncio.run(run())

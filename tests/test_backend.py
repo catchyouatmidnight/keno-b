@@ -394,6 +394,24 @@ def test_vague_document_request_samples_later_pages(client):
     assert context['document_coverage'] == 'selected excerpts/pages'
 
 
+def test_document_answer_necessity_prevents_multiple_planner(client):
+    calls, routing_calls = [], []
+    main.app.state.llm = fake_model(calls=calls, chunks=['Restore credentials (security.pdf p.2).'])
+    main.app.state.laya = fake_router(family='multiple', tool_need='answer', seen=routing_calls)
+    cid = new_conversation(client)
+    receipt = upload(client, cid, 'security.pdf', simple_pdf(['Delivery plan.', 'Secure onboarding uses restore credentials.'])).json()
+    response = send(client, cid, message='tell me more about secure onboarding', attachment_ids=[receipt['id']])
+    assert response.status_code == 200
+    context = response.json()['context']
+    assert context['route']['tool_policy'] == 'document_evidence_answer'
+    assert context['document_answer_mode'] == 'direct_stream'
+    assert context['tool_planning_rounds'] == 0 and context['tool_model_seconds'] == 0
+    assert context['history_turns'] == 0 and context['citation_check']['status'] == 'present'
+    assert len(routing_calls) == 1 and 'tool_family' not in routing_calls[0]['questions']
+    inference = [p for path, p in calls if path == '/v1/chat/completions']
+    assert len(inference) == 1 and inference[0]['stream'] is True
+
+
 def test_vision_is_local_bounded_and_selected_by_laya(client, monkeypatch):
     import io
     from PIL import Image
@@ -409,7 +427,7 @@ def test_vision_is_local_bounded_and_selected_by_laya(client, monkeypatch):
     context = response.json()['context']
     assert context['visual_sources'][0]['page'] == 2
     assert context['route']['question_count'] == 4
-    assert set(context['route']['decisions']) == {'thinking', 'source', 'document_scope', 'tool_family'}
+    assert set(context['route']['decisions']) == {'thinking', 'source', 'document_scope', 'tool_need'}
     payload = [p for path, p in calls if path == '/v1/chat/completions'][-1]
     parts = payload['messages'][-1]['content']
     assert parts[1]['image_url']['url'].startswith('data:image/jpeg;base64,')
