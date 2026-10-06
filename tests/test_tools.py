@@ -156,12 +156,18 @@ def test_document_overview_covers_last_page_and_source_preview(client):
     conversation=new_conversation(client)
     file=upload(client,conversation,'report.pdf',simple_pdf([f'Page {p} useful finding' for p in range(1,12)])).json()
     main.app.state.laya=fake_router(family='documents',scope='overview')
-    main.app.state.llm=native_model([[('document_overview',{})]])
+    requests=[]
+    main.app.state.llm=native_model([[('document_overview',{})]],requests=requests)
     result=send(client,conversation,message='Summarize the whole report',attachment_ids=[file['id']]).json()
     assert {s['page'] for s in result['context']['document_sources']}==set(range(1,12))
+    assert result['context']['document_answer_mode']=='direct_stream'
+    assert result['context']['available_tools']==[]
+    assert all(body.get('stream') for path,body in requests if path=='/v1/chat/completions')
     page=client.get(f"/api/v1/attachments/{file['id']}/pages/11")
     assert page.status_code==200 and page.headers['content-type']=='image/jpeg'
     assert client.get(f"/api/v1/attachments/{file['id']}/pages/12").status_code==422
+    # Genuine mixed operations retain the native planner and its file isolation.
+    main.app.state.laya=fake_router(family='multiple')
     main.app.state.llm=native_model([[('document_read',{'attachment_id':'foreign-file','pages':[1]})]])
     failed=send(client,conversation,request_id='foreign-doc-001',attachment_ids=[file['id']]).json()
     assert failed['context']['tool_calls'][0]['status']=='failed'

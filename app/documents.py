@@ -218,3 +218,46 @@ def check_citations(answer, sources, attachments):
                 invalid.append(pair)
     return {'status': 'invalid' if invalid else 'present' if cited else 'missing', 'invalid_references': invalid,
             'scope': 'explicit supplied filename/page labels only; does not verify claim accuracy'}
+
+
+def answer_excerpts(attachments, query, broad=False):
+    """Select bounded evidence before generation; no model tool round required.
+
+    Focused answers rank passages rather than always including each cover page.
+    Broad answers represent every extracted page, with explicit truncation.
+    """
+    requested = list(dict.fromkeys(int(n) for n in re.findall(
+        r"\b(?:page|halaman)\s+(\d+)\b", query, re.I)))
+    if requested:
+        if len(requested) > 4:
+            raise HTTPException(422, "Select one to four valid pages")
+        scoped = []
+        for a in attachments:
+            if a["kind"] == "pdf":
+                if any(not 1 <= p <= a["pages"] for p in requested):
+                    raise HTTPException(422, "Requested PDF page is out of range")
+                scoped.append({**a, "sections": [c for c in a["sections"] if c["page"] in requested]})
+            else:
+                scoped.append(a)
+        return overview(scoped, budget=4000)["excerpts"]
+    if broad:
+        return overview(attachments, budget=4000)["excerpts"]
+    words = set(re.findall(r"\w+", query.casefold())) - QUERY_STOP_WORDS - {"more"}
+    chunks = [{**c, "attachment_id": a["id"], "name": a["name"], "chunk": i + 1}
+              for a in attachments for i, c in enumerate(a["sections"])]
+    ranked = sorted(((len(words & set(re.findall(r"\w+", c["text"].casefold()))), c)
+                     for c in chunks), key=lambda pair: pair[0], reverse=True)
+    chosen = [c for score, c in ranked if score][:3]
+    if not chosen:
+        # No lexical evidence is not permission to invent an answer. Give the
+        # model bounded representative coverage and state its limitations.
+        return overview(attachments, budget=2600)["excerpts"]
+    remaining = 2600
+    result = []
+    for c in chosen:
+        if remaining <= 0:
+            break
+        text = c["text"][:remaining]
+        result.append({**c, "text": text, "shortened": len(text) < len(c["text"])})
+        remaining -= len(text)
+    return result

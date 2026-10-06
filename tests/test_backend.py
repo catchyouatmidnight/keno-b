@@ -383,7 +383,10 @@ def test_vague_document_request_samples_later_pages(client):
     assert response.status_code == 200
     context = response.json()['context']
     selected_pages = [source['page'] for source in context['document_sources']]
-    assert selected_pages == [1, 3, 5, 7, 9, 11]
+    assert selected_pages == list(range(1, 12))
+    assert context['document_answer_mode'] == 'direct_stream'
+    assert context['available_tools'] == []
+    assert all(p.get('stream') for path, p in calls if path == '/v1/chat/completions')
     payload = [p for path, p in calls if path == '/v1/chat/completions'][-1]
     assert 'April 2027' in payload['messages'][-1]['content']
     assert 'supplied by the application' in payload['messages'][-1]['content']
