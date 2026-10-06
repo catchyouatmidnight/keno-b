@@ -467,8 +467,9 @@ def test_v1_backup_migrates_without_resetting_personal_state(client, tmp_path):
     client.put('/api/v1/profile', json={'name': 'Zain'})
     conversation = new_conversation(client)
     with main.db() as db:
-        db.execute('DROP TABLE attachments')
-        db.execute('DROP TABLE conversation_summaries')
+        # Simulate the actual v1 schema, not merely a downgraded user_version.
+        for table in ('response_feedback', 'conversation_preferences', 'memory_meta', 'conversation_summaries', 'attachments'):
+            db.execute(f'DROP TABLE {table}')
         db.execute('PRAGMA user_version=1')
     legacy = tmp_path / 'legacy.sqlite3'
     snapshot(main.DB_PATH, legacy); validate(legacy)

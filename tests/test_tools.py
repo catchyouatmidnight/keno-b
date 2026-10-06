@@ -235,7 +235,9 @@ def test_schema_two_upgrade_keeps_profile_memories_and_attachments(client,tmp_pa
     client.put('/api/v1/memories/preference',json={'key':'preference','content':'Short answers'})
     file=upload(client,conversation,'notes.txt',b'Existing document').json()
     with main.db() as c:
-        c.execute('DROP TABLE conversation_summaries')
+        # Simulate the actual v2 schema before validating the backup.
+        for table in ('response_feedback', 'conversation_preferences', 'memory_meta', 'conversation_summaries'):
+            c.execute(f'DROP TABLE {table}')
         c.execute("DELETE FROM settings WHERE key='tools'")
         c.execute('PRAGMA user_version=2')
     old=tmp_path/'v2.db';snapshot(main.DB_PATH,old);validate(old)
