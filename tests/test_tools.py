@@ -571,7 +571,6 @@ def test_explicit_field_save_correct_recall_followup_no_inference(client):
     assert client.get('/api/v1/memories').json()[0]['content'] == 'my evaluation marker is sample123'
     new = new_conversation(client)
     assert send(client, new, request_id='field-recall', message='What is my evaluation marker?').json()['reply'] == 'Your evaluation marker is sample123.'
-    assert send(client, new, request_id='field-followup', message='Tell me more.').json()['reply'] == 'Your evaluation marker is sample123.'
     send(client, cid, request_id='field-correction', message='Remember that my evaluation marker is updated456.')
     assert len(client.get('/api/v1/memories').json()) == 1
     assert send(client, new_conversation(client), request_id='field-corrected-recall', message='What is my evaluation marker?').json()['reply'] == 'Your evaluation marker is updated456.'
@@ -596,3 +595,51 @@ def test_direct_field_parser_does_not_consume_mixed_or_untrusted_text():
     for text in ['Remember that my project is Keno and calculate 2+2.', 'Remember that my project is Keno. Explain it.', 'Do not remember that my project is Keno.', 'Remember that my name is Zain.', 'Remember that my project is   .']:
         assert tools.explicit_field_save(text) is None
     assert tools.explicit_calculation("Calculate __import__('os').getcwd()") is None
+
+
+def test_natural_location_correction_forget_and_disabled_memory(client):
+    main.app.state.laya = fake_router(family='none')
+    requests=[]
+    main.app.state.llm = native_model([], requests=requests)
+    cid=new_conversation(client)
+    send(client, cid, message='I live in Bekasi.')
+    result=send(client, new_conversation(client), request_id='natural-recall', message='Where do I live?').json()
+    assert result['reply'] == 'You live in Bekasi.'
+    send(client, cid, request_id='natural-correct', message='Actually, I moved to Bandung.')
+    assert len(client.get('/api/v1/memories').json()) == 1
+    assert send(client, new_conversation(client), request_id='natural-updated', message='What is my city?').json()['reply'] == 'You live in Bandung.'
+    forgotten=send(client, cid, request_id='natural-forget', message='Forget my city.').json()
+    assert forgotten['reply'] == 'Forgot the saved location.'
+    assert client.get('/api/v1/memories').json() == []
+    assert 'location saved' in send(client, new_conversation(client), request_id='natural-unknown', message='Where do I live?').json()['reply']
+    assert not any(path == '/v1/chat/completions' for path,_ in requests)
+    client.put('/api/v1/tools/settings', json={'automatic_memory':False})
+    main.app.state.llm = fake_model()
+    send(client, cid, request_id='natural-disabled', message='I live in Bekasi.')
+    assert client.get('/api/v1/memories').json() == []
+
+
+def test_followup_expands_using_references_instead_of_fact_guard(client):
+    seen=[]
+    main.app.state.laya = fake_router(family='none')
+    main.app.state.llm = fake_model(seen=seen)
+    cid=new_conversation(client)
+    send(client, cid, message='Remember that my evaluation marker is sample123.')
+    send(client, cid, request_id='expand-recall', message='What is my evaluation marker?')
+    main.app.state.laya = fake_router(family='memory')
+    main.app.state.llm = fake_model(seen=seen, chunks=['The saved marker is sample123. It was provided by you; no additional purpose was stated.'])
+    result=send(client, cid, request_id='expand-details', message='Tell me more.').json()
+    assert result['context']['route']['tool_policy'] == 'followup_expansion'
+    assert result['context'].get('answer_source') != 'saved_field_guard'
+    prompt=json.dumps(seen[-1])
+    assert 'followup_subject' in prompt and 'sample123' in prompt
+    assert 'It was provided by you' in result['reply']
+
+
+def test_negative_forget_is_not_executed_by_native_tools(client):
+    main.app.state.laya=fake_router(family='memory')
+    client.put('/api/v1/memories/user.location', json={'key':'user.location','content':'I live in Bekasi'})
+    main.app.state.llm=native_model([[('memory_forget', {'key':'user.location','quote':"Don't forget my city"})]])
+    result=send(client,new_conversation(client),message="Don't forget my city").json()
+    assert result['context']['tool_calls'][0]['status'] == 'failed'
+    assert client.get('/api/v1/memories').json()[0]['key'] == 'user.location'

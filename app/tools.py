@@ -10,6 +10,7 @@ from . import documents
 MAX_CALLS = 4
 MAX_ROUNDS = 2
 WRITE_REQUEST = re.compile(r"\b(remember|save|forget|delete|remove|ingat|simpan|hapus|lupakan)\b", re.I)
+NO_FORGET = re.compile(r"(?:don't|do not|never)\s+(?:forget|delete|remove)|jangan\s+(?:hapus|lupakan)", re.I)
 FORGET_REQUEST = re.compile(r"\b(forget|delete|remove|hapus|lupakan)\b", re.I)
 FOLLOWUP_SAVE = re.compile(r"^(?:please\s+)?(?:save|remember|simpan|ingat)(?:\s+(?:this|that|it|me|ini|itu|saya))?(?:\s+(?:please|for future chats))?[.!?]*$", re.I)
 # Detect an explicit firsthand save request for acknowledgement and required
@@ -69,6 +70,34 @@ def explicit_calculation(text):
     except (ValueError, SyntaxError, ArithmeticError):
         return None
     return {'expression': expression}
+
+
+LOCATION = re.compile(r"(?:actually,?\s*)?(?:i live in|i (?:have )?moved to|saya tinggal di|saya pindah ke)\s+([\w][\w '’-]{0,79})[.!]?", re.I)
+
+
+def location_fact(text):
+    m = LOCATION.fullmatch(text.strip())
+    if not m or re.search(r"\b(?:and|or|then|but|if|when|tomorrow|because|since|for|dan|atau)\b", m[1], re.I):
+        return None
+    return m[1].strip()
+
+
+def natural_memory(text, settings):
+    """Recognize only complete firsthand statements or explicit field deletion."""
+    if NO_SAVE.search(text) or NO_FORGET.search(text):
+        return None
+    forget = re.fullmatch(r"(?:please\s+)?(?:forget|delete|remove)\s+my\s+(city|location)[.!]?", text.strip(), re.I)
+    if forget:
+        return ('memory_forget', {'key': 'user.location', 'quote': text.strip()})
+    if not settings['automatic_memory'] or FORGET_REQUEST.search(text):
+        return None
+    location = location_fact(text)
+    if location:
+        return ('memory_save', {'key': 'user.location', 'quote': text.strip().rstrip('.!'), 'category': 'fact'})
+    name = explicit_name_save('Remember that ' + text.strip())
+    if name:
+        return ('memory_save', name)
+    return None
 
 
 class ToolValidationError(ValueError):
@@ -208,7 +237,7 @@ class ToolSession:
             quote = self.quote(args["quote"], followup=name == "memory_save")
             if name == "memory_save" and NO_SAVE.search(self.value.message): raise ToolValidationError("The user requested no memory saving")
             if name == "memory_forget":
-                if not FORGET_REQUEST.search(self.value.message): raise ToolValidationError("Forgetting requires an explicit current-user request")
+                if NO_FORGET.search(self.value.message) or not FORGET_REQUEST.search(self.value.message): raise ToolValidationError("Forgetting requires an explicit current-user request")
                 if not any(r["key"] == key for r in self.rows(key)): return {"deleted": False, "key": key}
                 self.mutations.append({"action": "forget", "key": key})
                 return {"key": key, "deleted": True, "commits_with_answer": True}
@@ -310,6 +339,11 @@ def weather_reply(session, metadata):
 def memory_reply(session, metadata=None):
     """Ground explicit save acknowledgements and memory capability in server state."""
     text = session.value.message.strip()
+    forgot = [op['key'] for op in session.mutations if op['action'] == 'forget']
+    if forgot:
+        return "Forgot the saved " + ("name" if forgot[0] == 'user.name' else "location" if forgot[0] == 'user.location' else "fact") + "."
+    if (metadata or {}).get('tool_planning_mode') == 'natural_memory' and session.events and session.events[-1]['name'] == 'memory_forget':
+        return "I don't have that fact saved."
     memory_save_turn = (metadata or {}).get("route", {}).get("tool_family") == "memory" and any(event["name"] == "memory_save" for event in session.events)
     explicit_save = bool(FIRSTHAND_SAVE.search(text)) and not NO_SAVE.search(text)
     if FOLLOWUP_SAVE.fullmatch(text) or memory_save_turn or explicit_save:

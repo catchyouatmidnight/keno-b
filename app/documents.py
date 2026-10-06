@@ -89,6 +89,11 @@ def retrieve(attachments, query, limit=6, overview=False):
     words = set(re.findall(r"\w+", query.casefold())) - QUERY_STOP_WORDS
     all_chunks = [{**chunk, "attachment_id": a["id"], "name": a["name"], "chunk": i + 1}
                   for a in attachments for i, chunk in enumerate(a["sections"])]
+    requested = {int(n) for n in re.findall(r"(?:page|halaman)\s+(\d+)", query, re.I)}
+    if requested and not overview and len(attachments) == 1 and attachments[0]['kind'] == 'pdf':
+        if any(p < 1 or p > attachments[0]['pages'] for p in requested):
+            raise HTTPException(422, "Requested PDF page is out of range")
+        return [c for c in all_chunks if c['page'] in requested][:limit]
     scores = [len(words & set(re.findall(r"\w+", c["text"].casefold()))) for c in all_chunks]
     if all_chunks and (overview or not any(scores)):
         # Spread coverage over the available chunks, preserving file/page labels.
@@ -188,3 +193,28 @@ def visual_inputs(attachments, query, enabled, max_images=2):
                     if len(images) >= max_images:
                         break
     return ["data:image/jpeg;base64," + base64.b64encode(raw).decode() for raw in images], sources
+
+
+def coverage(attachments, excerpts):
+    result = []
+    for a in attachments:
+        extracted = {c['page'] for c in a['sections'] if c['page'] is not None}
+        supplied = {c['page'] for c in excerpts if c['attachment_id'] == a['id'] and c['page'] is not None}
+        result.append({'name': a['name'], 'total_pages': a['pages'], 'supplied_pages': sorted(supplied),
+                       'pages_without_text': [p for p in range(1, a['pages'] + 1) if p not in extracted] if a['kind'] == 'pdf' else [],
+                       'extracted_pages_not_supplied': sorted(extracted - supplied), 'scope': 'selected text excerpts; not a full visual review'})
+    return result
+
+
+def check_citations(answer, sources, attachments):
+    """Check explicit filename/page references, not the truth of paraphrases."""
+    invalid, cited = [], []
+    for a in attachments:
+        pattern = re.escape(a['name']) + r"\s*[,:(\[]?\s*(?:p\.?|page|halaman)\s*(\d+)"
+        for number in re.findall(pattern, answer, re.I):
+            pair = {'name': a['name'], 'page': int(number)}
+            cited.append(pair)
+            if not any(s['name'] == a['name'] and s['page'] == int(number) for s in sources):
+                invalid.append(pair)
+    return {'status': 'invalid' if invalid else 'present' if cited else 'missing', 'invalid_references': invalid,
+            'scope': 'explicit supplied filename/page labels only; does not verify claim accuracy'}

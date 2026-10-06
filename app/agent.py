@@ -25,8 +25,13 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     planning_seconds, execution_seconds, rounds = 0.0, 0.0, 0
     name_save = tools.explicit_name_save(session.value.message) if required_save else None
     direct_save = name_save or (tools.explicit_field_save(session.value.message) if required_save else None)
+    natural = tools.natural_memory(session.value.message, session.settings) if not session.attachments else None
+    natural = natural if natural and natural[0] in allowed else None
+    if natural and natural[0] == 'memory_save':
+        direct_save = natural[1]
+    direct_forget = natural[1] if natural and natural[0] == 'memory_forget' else None
     direct_calculation = tools.explicit_calculation(session.value.message) if "calculator" in allowed and metadata.get("route", {}).get("tool_policy") == "explicit_calculation" else None
-    metadata['tool_planning_mode'] = 'explicit_name_save' if name_save else 'explicit_field_save' if direct_save else 'explicit_calculation' if direct_calculation else 'model'
+    metadata['tool_planning_mode'] = 'natural_memory' if natural else 'explicit_name_save' if name_save else 'explicit_field_save' if direct_save else 'explicit_calculation' if direct_calculation else 'model'
     planner_thinking = bool(metadata.get('route', {}).get('thinking', False)) and not required_save
     planner_budget = metadata.get('thinking_budget', 0) if planner_thinking else 0
     metadata['tool_thinking_budget'] = planner_budget
@@ -36,6 +41,15 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         yield 'tool', event
         execution_started = time.monotonic()
         result = await session.execute('memory_save', direct_save)
+        execution_seconds = time.monotonic() - execution_started
+        event = {**event, 'status': 'complete', 'memory_key': result['key']}
+        session.events.append(event)
+        yield 'tool', event
+    if direct_forget:
+        event = {'name': 'memory_forget', 'status': 'running', 'index': 1}
+        yield 'tool', event
+        execution_started = time.monotonic()
+        result = await session.execute('memory_forget', direct_forget)
         execution_seconds = time.monotonic() - execution_started
         event = {**event, 'status': 'complete', 'memory_key': result['key']}
         session.events.append(event)
@@ -50,7 +64,7 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         session.events.append(event)
         metadata['_calculation_reply'] = f"{result['expression']} = {result['result']}."
         yield 'tool', event
-    for round_number in range(0 if direct_save or direct_calculation else tools.MAX_ROUNDS):
+    for round_number in range(0 if direct_save or direct_forget or direct_calculation else tools.MAX_ROUNDS):
         await check_budget(messages, metadata, request_definitions)
         planning_started = time.monotonic()
         response = await client.post("/v1/chat/completions", json={

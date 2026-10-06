@@ -550,3 +550,20 @@ def test_unknown_name_does_not_use_model_identity(client):
     result = send(client, new_conversation(client), message='What is my name?').json()
     assert "don't have your name" in result['reply']
     assert not any(path == '/v1/chat/completions' for path, _ in calls)
+
+
+def test_pdf_page_selection_coverage_and_citation_diagnostics(client):
+    cid=new_conversation(client)
+    receipt=upload(client, cid, 'launch.pdf', simple_pdf(['Project Atlas overview.', 'Launch is April 17, 2027.', ''])).json()
+    main.app.state.llm = fake_model(chunks=['Launch is April 17, 2027 (launch.pdf p.2).'])
+    result=send(client, cid, message='What is the launch date on page 2?', attachment_ids=[receipt['id']]).json()
+    assert {s['page'] for s in result['context']['document_sources']} == {2}
+    coverage=result['context']['document_coverage_details'][0]
+    assert coverage['supplied_pages'] == [2] and coverage['pages_without_text'] == [3]
+    assert result['context']['citation_check']['status'] == 'present'
+    main.app.state.llm=fake_model(chunks=['Launch is April 17, 2027 (launch.pdf p.9).'])
+    invalid=send(client, cid, request_id='citation-invalid', message='Launch date on page 2?', attachment_ids=[receipt['id']])
+    assert invalid.status_code == 502
+    turn = client.get(f'/api/v1/conversations/{cid}').json()['turns'][-1]
+    assert turn['status'] == 'failed' and not turn['assistant_text']
+    assert send(client, cid, request_id='page-outofrange', message='Read page 9', attachment_ids=[receipt['id']]).status_code == 422
