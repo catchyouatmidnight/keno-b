@@ -45,8 +45,26 @@ window.KenoMarkdown = (() => {
       const list=line.match(/^\s*(?:[-*+] |\d+\. )(.+)$/);
       if(list) {
         const ordered=/^\s*\d+\./.test(line),el=node(ordered?'ol':'ul');
-        while(index<lines.length) { const match=lines[index].match(ordered?/^\s*\d+\. (.+)$/:/^\s*[-*+] (.+)$/);if(!match)break;
-          const li=node('li');inline(li,match[1]);el.append(li);index++; }
+        const itemPattern=ordered?/^\s*\d+\. (.+)$/:/^\s*[-*+] (.+)$/;
+        if(ordered) { const start=Number(line.match(/^\s*(\d+)\./)[1]);el.start=Number.isSafeInteger(start)&&start<=2147483647?start:1; }
+        while(index<lines.length) {
+          const match=lines[index].match(itemPattern);if(!match)break;
+          const li=node('li');inline(li,match[1]);el.append(li);index++;
+          while(index<lines.length) {
+            if(itemPattern.test(lines[index]))break;
+            if(!lines[index].trim()) {
+              let next=index;while(next<lines.length&&!lines[next].trim())next++;
+              // Blank lines make a loose list, not a fresh list starting at 1.
+              if(next<lines.length&&itemPattern.test(lines[next]))index=next;
+              break;
+            }
+            // Markdown permits wrapped item text without a repeated marker.
+            // New blocks and a different list kind remain separate blocks.
+            if(/^\s*(?:#{1,6}\s|```|>\s?|[-*+]\s|\d+\.\s)/.test(lines[index]) ||
+               (index+1<lines.length&&lines[index].includes('|')&&/^\s*\|?\s*:?-{3,}/.test(lines[index+1])))break;
+            li.append(document.createTextNode(' '));inline(li,lines[index].trim());index++;
+          }
+        }
         parent.append(el);continue;
       }
       if(/^>\s?/.test(line)) { const el=node('blockquote');inline(el,line.replace(/^>\s?/,''));parent.append(el);index++;continue; }

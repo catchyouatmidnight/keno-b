@@ -21,6 +21,19 @@ assert.equal(nodes.filter(n=>n.tagName==='a').length,1);
 assert.equal(nodes.find(n=>n.tagName==='a').href,'https://example.org/');
 assert(!nodes.some(n=>['script','img'].includes(n.tagName)));
 assert(nodes.some(n=>n.tagName==='code'&&n.textContent.includes('<script>')));
+// Model-generated Markdown often repeats "1." and separates items by blanks.
+// One ordered-list node lets the browser show 1, 2, 3 instead of restarting.
+context.KenoMarkdown.render(output,'1. **Current state**\n\n1. Memory optimization\nwrapped item detail\n\n1. Secure onboarding\n\nReferences: local document');
+assert.equal(output.children.filter(n=>n.tagName==='ol').length,1);
+const ordered=output.children.find(n=>n.tagName==='ol');
+assert.equal(ordered.start,1);assert.equal(ordered.children.length,3);
+assert(descendants(ordered.children[1]).some(n=>n.textContent==='wrapped item detail'));
+assert.equal(output.children.at(-1).tagName,'p');
+context.KenoMarkdown.render(output,'3. Third\n\n4. Fourth\n\nSeparate paragraph\n\n1. New list');
+const separate=output.children.filter(n=>n.tagName==='ol');
+assert.equal(separate.length,2);assert.equal(separate[0].start,3);assert.equal(separate[0].children.length,2);assert.equal(separate[1].start,1);
+context.KenoMarkdown.render(output,'- First\n\n- Second\n\n1. Ordered');
+assert.equal(output.children[0].tagName,'ul');assert.equal(output.children[0].children.length,2);assert.equal(output.children[1].tagName,'ol');
 const apiKey='simulated-local-key';storage.set('keno.serverAccessKey',apiKey);
 context.fetch=async(path,options)=>{calls.push([path,options.headers.Authorization]);let data=[];
   if(path.endsWith('/status'))data={router_ready:true,model_ready:true};
