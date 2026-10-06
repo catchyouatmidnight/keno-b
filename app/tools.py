@@ -175,7 +175,7 @@ SPECS = {
                        {"expression": STRING}, ["expression"]),
     "weather": spec("weather", "Get current weather and today's forecast for a city explicitly supplied in the current user request. Ask for a city if none was supplied. Only the city is sent to Open-Meteo.",
                     {"city": STRING}, ["city"]),
-    "web_search": spec("web_search", "Search the web for an explicit current user request. query must be a verbatim span of the current request; never send file contents, memories or chat history. Returns snippets and links, not a full-page review.",
+    "web_search": spec("web_search", "Search the web for an explicit current user request. Model-generated queries must be a verbatim span of the current request. A server-validated search follow-up may reuse only the prior query already sent to search. Never send file contents, memories or assistant text. Returns snippets and links, not a full-page review.",
                        {"query": STRING}, ["query"]),
 }
 
@@ -229,9 +229,10 @@ def calculate(expression):
 
 
 class ToolSession:
-    def __init__(self, value, attachments, settings, db, now, lookup):
+    def __init__(self, value, attachments, settings, db, now, lookup, route=None):
         self.value, self.attachments, self.settings = value, attachments, settings
         self.db, self.now, self.lookup = db, now, lookup
+        self.route = route or {}
         self.mutations, self.events, self.sources, self.web_sources = [], [], [], []
         self.weather_results, self.weather_city = [], None
         self.search_results = []
@@ -314,7 +315,14 @@ class ToolSession:
             if not enabled: raise ToolValidationError("This external lookup is disabled")
             field = "city" if name == "weather" else "query"
             text = args[field]
-            if not isinstance(text, str) or not 1 <= len(text) <= 300 or text.casefold() not in self.value.message.casefold():
+            if not isinstance(text, str) or not 1 <= len(text) <= 300:
+                raise ToolValidationError("External lookup input must contain 1–300 characters")
+            if name == "web_search":
+                routed = self.route.get("web_search_query")
+                allowed = isinstance(routed, str) and text.casefold() == routed.casefold()
+                if not allowed and text.casefold() not in self.value.message.casefold():
+                    raise ToolValidationError("Web search input must come from the current request or a validated search follow-up")
+            elif text.casefold() not in self.value.message.casefold():
                 raise ToolValidationError("External lookup input must be supplied in the current user request")
             if name == "weather": self.weather_city = text
             response = await self.lookup.post("/" + ("weather" if name == "weather" else "search"), json={field: text})
@@ -326,6 +334,17 @@ class ToolSession:
                 self.weather_results.append({"city": text, "result": result})
             else:
                 if not isinstance(result.get("results"), list): raise ToolValidationError("Invalid web search result")
+                compact = []
+                for row in result["results"][:3]:
+                    if not isinstance(row, dict): continue
+                    compact.append({"title": str(row.get("title", ""))[:160],
+                                    "url": str(row.get("url", ""))[:2000],
+                                    "snippet": str(row.get("snippet", ""))[:420]})
+                result = {**result, "results": compact}
+                urls = {row["url"] for row in compact if row["url"]}
+                result["sources"] = [source for source in result.get("sources", [])
+                                     if isinstance(source, dict) and source.get("url") in urls][:3]
+                result["coverage"] = "up to three search snippets only; linked pages were not fetched or verified"
                 self.search_results.append({"query": text, "result": result})
             self.web_sources.extend(result.get("sources", []))
             return result

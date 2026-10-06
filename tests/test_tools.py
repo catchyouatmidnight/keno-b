@@ -243,18 +243,21 @@ def test_schema_two_upgrade_keeps_profile_memories_and_attachments(client,tmp_pa
     assert client.get(f"/api/v1/attachments/{file['id']}/pages/1").json()['text']=='Existing document'
 
 
-def test_web_search_executes_explicit_requests_and_clarified_followups(client):
+def test_web_search_executes_explicit_requests_and_clarified_followups(client, monkeypatch):
     client.put('/api/v1/tools/settings', json={'search_enabled': True})
     outbound = []
     def lookup(request):
         payload = json.loads(request.content)
         outbound.append((request.url.path, payload))
-        return httpx.Response(200, json={'query': payload['query'],
-            'results': [{'title': 'Match report', 'url': 'https://example.com/match', 'snippet': 'Indonesia vs Thailand details'}],
-            'sources': [{'title': 'Match report', 'url': 'https://example.com/match'}],
+        results = [{'title': f'Match report {i}', 'url': f'https://example.com/match-{i}',
+                    'snippet': ('Indonesia vs Thailand details ' * 30)} for i in range(5)]
+        return httpx.Response(200, json={'query': payload['query'], 'results': results,
+            'sources': [{'title': row['title'], 'url': row['url']} for row in results],
             'coverage': 'search snippets only'})
     main.app.state.lookup = httpx.AsyncClient(base_url='http://lookup:8000', transport=httpx.MockTransport(lookup))
-    main.app.state.laya = fake_router(family='none')
+    router_calls = []
+    main.app.state.laya = fake_router(family='none', seen=router_calls)
+    monkeypatch.setattr(main.calendar_tools, 'current_clock', lambda: {'date':'2026-10-06','timezone':'Asia/Jakarta'})
 
     conversation = new_conversation(client)
     calls = []
@@ -271,9 +274,30 @@ def test_web_search_executes_explicit_requests_and_clarified_followups(client):
     assert second['context']['available_tools'] == ['web_search']
     assert second['context']['tool_planning_rounds'] == 0
     assert second['context']['tool_calls'] == [{'name': 'web_search', 'status': 'complete', 'index': 1}]
-    assert second['context']['web_sources'][0]['url'] == 'https://example.com/match'
+    assert len(second['context']['web_sources']) == 3
+    assert second['context']['web_sources'][0]['url'] == 'https://example.com/match-0'
+    assert second['context']['route']['call_count'] == 0
+    assert second['context']['route']['thinking'] is False
     completions = [body for path, body in calls if path == '/v1/chat/completions']
     assert completions and all(body.get('stream') for body in completions)
+
+    outbound.clear()
+    main.app.state.llm = fake_model(calls=calls, chunks=['The final was clarified from current search evidence.'])
+    clarified = send(client, conversation, request_id='search-refine-001', message='i mean the final').json()
+    refined_query = query + ' i mean the final'
+    assert outbound == [('/search', {'query': refined_query})]
+    assert clarified['context']['route']['tool_policy'] == 'web_search_followup'
+    assert clarified['context']['context_policy'] == 'followup'
+    assert clarified['context']['history_turns'] >= 2
+
+    outbound.clear()
+    main.app.state.llm = fake_model(calls=calls, chunks=['The date correction is grounded in fresh results.'])
+    corrected = send(client, conversation, request_id='search-relative-001', message='it was yesterday').json()
+    assert outbound == [('/search', {'query': refined_query + ' it was yesterday date 2026-10-05'})]
+    assert corrected['context']['route']['tool_policy'] == 'web_search_followup'
+    assert corrected['context']['route']['call_count'] == 0
+    assert corrected['context']['route']['thinking'] is False
+    assert router_calls == []
 
     outbound.clear()
     direct_calls = []
@@ -710,3 +734,11 @@ def test_negative_forget_is_not_executed_by_native_tools(client):
     result=send(client,new_conversation(client),message="Don't forget my city").json()
     assert result['context']['tool_calls'][0]['status'] == 'failed'
     assert client.get('/api/v1/memories').json()[0]['key'] == 'user.location'
+
+
+def test_natural_corrections_are_followups():
+    from app import context_policy
+    prior = ['timnas indo vs thailand 2026, score']
+    assert context_policy.plan('i mean the final', prior)['mode'] == 'followup'
+    assert context_policy.plan('it was yesterday', prior)['mode'] == 'followup'
+    assert context_policy.plan('the final match', prior)['recent_limit'] == 4

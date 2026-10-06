@@ -101,12 +101,12 @@ async def search(value: Search):
     results = []
     rows = payload.get("results", [])
     if not isinstance(rows, list): raise HTTPException(502, "Invalid search response")
-    for row in rows[:20]:
+    for row in rows[:12]:
         if not isinstance(row, dict): continue
         url = str(row.get("url", ""))
         if urlparse(url).scheme not in {"http", "https"}: continue
-        results.append({"title": plain(row.get("title", ""), 160), "url": url[:2000], "snippet": plain(row.get("content", ""), 700)})
-        if len(results) >= 5: break
+        results.append({"title": plain(row.get("title", ""), 160), "url": url[:2000], "snippet": plain(row.get("content", ""), 420)})
+        if len(results) >= 3: break
     return {"query": value.query, "results": results,
             "sources": [{"title": row["title"], "url": row["url"]} for row in results],
-            "coverage": "search snippets only; linked pages were not fetched or verified"}
+            "coverage": "up to three search snippets only; linked pages were not fetched or verified"}

@@ -10,7 +10,7 @@ import time
 import tempfile
 import uuid
 from contextlib import aclosing, asynccontextmanager, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
@@ -452,6 +452,40 @@ def history_answer_for_prompt(user_text, answer):
     return answer[match.end():] if match else answer
 
 
+def deterministic_route(tool_policy, tool_family="none", web_search_query=None):
+    """Skip Laya when the user has already selected an unambiguous action."""
+    route = {"engine": "deterministic", "thinking": False, "vision": False,
+             "document_scope": "focused", "question_count": 0, "call_count": 0,
+             "tool_family": tool_family, "tool_policy": tool_policy,
+             "uncertain": False, "decisions": {}, "effort_policy": "explicit_quick",
+             "seconds": 0.0}
+    if web_search_query:
+        route["web_search_query"] = web_search_query
+    return route
+
+
+def continued_web_query(previous_query, message):
+    """Refine only a query that was already sent to web search."""
+    previous = " ".join(str(previous_query).split())
+    current = " ".join(message.split())
+    suffix = ""
+    try:
+        clock = calendar_tools.current_clock()
+        today = datetime.fromisoformat(clock["date"]).date()
+        if re.search(r"\byesterday\b", current, re.I):
+            suffix = f" date {today - timedelta(days=1)}"
+        elif re.search(r"\btoday\b", current, re.I):
+            suffix = f" date {today}"
+        elif re.search(r"\btomorrow\b", current, re.I):
+            suffix = f" date {today + timedelta(days=1)}"
+    except ValueError:
+        pass
+    tail = (current + suffix).strip()
+    room = max(0, 300 - len(tail) - 1)
+    base = previous[:room].rstrip()
+    return (base + " " + tail).strip()[:300]
+
+
 def system_prompt(selected, has_uploads=False, available_tools=None):
     identity = setting("identity")
     prompt=(f"You are {identity['name']}, the ASSISTANT. {identity['personality']}\n"
@@ -464,7 +498,9 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
     if has_uploads:
         prompt+="Supplied uploads are local file contents: analyze them directly without internet access. Cite filenames/pages, preserve dates, distinguish recommendations and disclose missing coverage.\n"
     if available_tools:
-        prompt+="Use only supplied tools. Save lasting user facts using exact USER evidence, never file/assistant text; only successful saves persist. Forget only on request. Use successful tool results for answers. Live lookup needs an explicit request; never send profile, files or history.\n"
+        prompt+="Use only supplied tools. Save lasting user facts using exact USER evidence, never file/assistant text; only successful saves persist. Forget only on request. Use successful tool results for answers. Live lookup needs an explicit request; never send profile, files, assistant text, or unrelated history. A validated web-search follow-up may reuse only the prior query that was already sent.\n"
+        if "web_search" in available_tools:
+            prompt+="For web-search answers, use only facts explicitly supported by returned snippets. Never invent or silently reconcile dates, scores, names, or other details. If snippets conflict or do not support a detail, say that clearly. Keep the answer concise and prioritize the strongest results.\n"
     return prompt
 
 
@@ -492,7 +528,7 @@ async def fit_context(value, route=None, attachments=None):
     retrieval_query = value.message
     with db() as c:
         previous = c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 1", (value.conversation_id,)).fetchone()
-    followup = bool(context_policy.FOLLOWUP.fullmatch(value.message))
+    followup = context_policy.is_followup(value.message)
     if followup and previous:
         retrieval_query += " " + previous[0][:300]
     excerpts = documents.answer_excerpts(attachments, retrieval_query,
@@ -519,6 +555,11 @@ async def fit_context(value, route=None, attachments=None):
         # Changing retrieval belongs after the stable instructions and history,
         # so it does not invalidate their cached prefix on every new question.
         reference = {}
+        if re.search(r"\b(?:today|yesterday|tomorrow|tonight|last night|this morning|this afternoon|this evening)\b", value.message, re.I):
+            try:
+                reference["current_clock"] = calendar_tools.current_clock()
+            except ValueError:
+                pass
         if followup and recent and not direct_document:
             reference['followup_subject'] = {'user_request': recent[-1][0][:300], 'assistant_answer': history_answer_for_prompt(*recent[-1])[:1000], 'requested_operation': value.message.strip()}
         if relevant_profile:
@@ -697,7 +738,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
     first_reasoning = None
     first_content = None
     opening = response_style.ResponseFilter(value.message, enabled=not attachments)
-    session = tools.ToolSession(value, attachments or [], setting("tools"), db, now, app.state.lookup)
+    session = tools.ToolSession(value, attachments or [], setting("tools"), db, now, app.state.lookup, metadata.get("route", {}))
     try:
         metadata["max_tokens"] = value.max_tokens
         definitions = [tools.SPECS[name] for name in metadata.get("available_tools", [])]
@@ -751,8 +792,9 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                                 tool_model_seconds=0.0, tool_execution_seconds=0.0,
                                 tool_planning_rounds=0, tool_planning_mode="direct_evidence")
             model_started = time.monotonic()
+            web_answer = metadata.get("route", {}).get("tool_policy") in {"explicit_web_search", "web_search_followup"}
             payload = {"model": LLM_MODEL, "messages": messages, "stream": True,
-                       "temperature": 0.6, "max_tokens": value.max_tokens + metadata.get("thinking_budget", 0),
+                       "temperature": 0.2 if web_answer else 0.6, "max_tokens": value.max_tokens + metadata.get("thinking_budget", 0),
                        "chat_template_kwargs": {"enable_thinking": metadata.get("route", {}).get("thinking", False)},
                        "reasoning_format": "deepseek", "reasoning_budget_tokens": metadata.get("thinking_budget", 0),
                        "cache_prompt": True}
@@ -863,20 +905,33 @@ async def chat(value: ChatInput):
             if len(attachments) > 4:
                 raise HTTPException(422, "Select up to four combined chat/library files")
         with db() as c:
-            prior = c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 2", (value.conversation_id,)).fetchall()
-        history = "\n".join(str(t[0])[:300] for t in reversed(prior))
-        previous_user = str(prior[0][0]) if prior else ""
-        calendar_result = calendar_tools.calculate(value.message,[str(t[0]) for t in prior]) if not attachments else None
-        route = await routing.decide(app.state.laya, value.message, history, attachments)
+            prior = c.execute("SELECT user_text,metadata FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 2", (value.conversation_id,)).fetchall()
+        history = "\n".join(str(t["user_text"])[:300] for t in reversed(prior))
+        previous_user = str(prior[0]["user_text"]) if prior else ""
+        previous_metadata = json.loads(prior[0]["metadata"]) if prior else {}
+        previous_route = previous_metadata.get("route", {}) if isinstance(previous_metadata, dict) else {}
+        calendar_result = calendar_tools.calculate(value.message,[str(t["user_text"]) for t in prior]) if not attachments else None
+        route = None
         if not attachments:
             search_query = tools.explicit_web_search(value.message)
             search_followup = tools.web_search_followup(value.message, previous_user)
+            continued_search = None
+            previous_query = previous_route.get("web_search_query")
+            previous_policy = previous_route.get("tool_policy")
+            if (context_policy.is_followup(value.message)
+                    and previous_policy in {"explicit_web_search", "web_search_followup"}
+                    and isinstance(previous_query, str) and previous_query.strip()):
+                continued_search = continued_web_query(previous_query, value.message)
             if tools.bare_web_search(value.message):
-                route.update(tool_family="none", tool_policy="web_search_needs_query", thinking=False, effort_policy="explicit_search_clarify_quick")
+                route = deterministic_route("web_search_needs_query")
             elif search_query:
-                route.update(tool_family="live", tool_policy="explicit_web_search", web_search_query=search_query)
+                route = deterministic_route("explicit_web_search", "live", search_query)
             elif search_followup:
-                route.update(tool_family="live", tool_policy="web_search_followup", web_search_query=search_followup)
+                route = deterministic_route("web_search_followup", "live", search_followup)
+            elif continued_search:
+                route = deterministic_route("web_search_followup", "live", continued_search)
+        if route is None:
+            route = await routing.decide(app.state.laya, value.message, history, attachments)
         # Explicit user actions outrank a probabilistic answer/action label.
         # Preserve the raw Laya decision so disagreements stay observable.
         if not attachments and not tools.NO_SAVE.search(value.message) and not tools.FORGET_REQUEST.search(value.message):

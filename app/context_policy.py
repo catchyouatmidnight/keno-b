@@ -4,7 +4,8 @@ from .documents import QUERY_STOP_WORDS
 
 FOLLOWUP=re.compile(r'\s*(?:do that|do it|calculate (?:it|that)|go ahead|yes please|hitung itu|lakukan itu|which is|who is that|who exactly|what about that|tell me more|expand on that|explain further|continue|repeat(?: that)?(?: again)?|say that again|make it shorter|shorter|translate that|rewrite that|in Indonesian|in English|yea switch|yeah switch|why|how so|yes|yeah|yea|yep|ok|okay|lanjut|ulangi|kenapa)\s*[?.!]*',re.I)
 ROUTINE=re.compile(r'\s*(?:hello|hi|hey|halo|hai|testing|test|how are (?:you|u)|apa kabar|thanks|thank you|terima kasih)\s*[?.!]*',re.I)
-FOLLOWUP_PREFIX=re.compile(r'^\s*(?:and|what about|how about|also|then|but|dan|kalau|lalu)\b',re.I)
+FOLLOWUP_PREFIX=re.compile(r"^\s*(?:and|what about|how about|also|then|but|dan|kalau|lalu|i mean|i meant|actually|no[, ]|it was|that was|this was|they were|he was|she was)\b",re.I)
+REFERENTIAL_FOLLOWUP=re.compile(r"^\s*(?:the\s+(?:final|match|game|result|score)|it|that|this|those|these)\b",re.I)
 PAST=re.compile(r'\b(?:earlier|previously|last time|previous conversation|old chat|before|sebelumnya|tadi)\b',re.I)
 STOP=QUERY_STOP_WORDS|{'hello','hi','hey','testing','test','can','do','does','u','please','help'}
 
@@ -12,10 +13,13 @@ STOP=QUERY_STOP_WORDS|{'hello','hi','hey','testing','test','can','do','does','u'
 def words(text):return set(re.findall(r'\w+',text.casefold()))-STOP
 
 
+def is_followup(query):
+    return bool(FOLLOWUP.fullmatch(query) or FOLLOWUP_PREFIX.search(query) or REFERENTIAL_FOLLOWUP.search(query))
+
+
 def plan(query,prior,attachments=False):
     if attachments:return {'mode':'documents','recent_limit':4,'older':True}
-    if FOLLOWUP.fullmatch(query):return {'mode':'followup','recent_limit':4,'older':bool(PAST.search(query))}
-    if FOLLOWUP_PREFIX.search(query):return {'mode':'followup','recent_limit':2,'older':bool(PAST.search(query))}
+    if is_followup(query):return {'mode':'followup','recent_limit':4,'older':bool(PAST.search(query))}
     if PAST.search(query):return {'mode':'recall','recent_limit':4,'older':True}
     if ROUTINE.fullmatch(query):return {'mode':'routine','recent_limit':0,'older':False}
     # Only USER requests establish topical relevance; do not retrieve model hallucinations.
