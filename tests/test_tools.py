@@ -243,6 +243,65 @@ def test_schema_two_upgrade_keeps_profile_memories_and_attachments(client,tmp_pa
     assert client.get(f"/api/v1/attachments/{file['id']}/pages/1").json()['text']=='Existing document'
 
 
+def test_web_search_executes_explicit_requests_and_clarified_followups(client):
+    client.put('/api/v1/tools/settings', json={'search_enabled': True})
+    outbound = []
+    def lookup(request):
+        payload = json.loads(request.content)
+        outbound.append((request.url.path, payload))
+        return httpx.Response(200, json={'query': payload['query'],
+            'results': [{'title': 'Match report', 'url': 'https://example.com/match', 'snippet': 'Indonesia vs Thailand details'}],
+            'sources': [{'title': 'Match report', 'url': 'https://example.com/match'}],
+            'coverage': 'search snippets only'})
+    main.app.state.lookup = httpx.AsyncClient(base_url='http://lookup:8000', transport=httpx.MockTransport(lookup))
+    main.app.state.laya = fake_router(family='none')
+
+    conversation = new_conversation(client)
+    calls = []
+    main.app.state.llm = fake_model(calls=calls, chunks=['Search results are available.'])
+    first = send(client, conversation, request_id='search-clarify-001', message='search from google').json()
+    assert first['reply'] == 'What would you like me to search for?'
+    assert first['context']['route']['tool_policy'] == 'web_search_needs_query'
+    assert outbound == []
+
+    query = 'information about the 2026 Indonesia vs Thailand match.'
+    second = send(client, conversation, request_id='search-followup-001', message=query).json()
+    assert outbound == [('/search', {'query': query})]
+    assert second['context']['route']['tool_policy'] == 'web_search_followup'
+    assert second['context']['available_tools'] == ['web_search']
+    assert second['context']['tool_planning_rounds'] == 0
+    assert second['context']['tool_calls'] == [{'name': 'web_search', 'status': 'complete', 'index': 1}]
+    assert second['context']['web_sources'][0]['url'] == 'https://example.com/match'
+    completions = [body for path, body in calls if path == '/v1/chat/completions']
+    assert completions and all(body.get('stream') for body in completions)
+
+    outbound.clear()
+    direct_calls = []
+    main.app.state.llm = fake_model(calls=direct_calls, chunks=['Direct search completed.'])
+    direct = send(client, new_conversation(client), request_id='search-direct-001',
+                  message='Search the web for Keno-B release notes.').json()
+    assert outbound == [('/search', {'query': 'Keno-B release notes'})]
+    assert direct['context']['route']['tool_policy'] == 'explicit_web_search'
+    assert direct['context']['tool_planning_mode'] == 'explicit_web_search'
+    assert all(body.get('stream') for path, body in direct_calls if path == '/v1/chat/completions')
+
+
+def test_web_search_disabled_never_claims_it_searched(client):
+    outbound = []
+    main.app.state.lookup = httpx.AsyncClient(base_url='http://lookup:8000',
+        transport=httpx.MockTransport(lambda request: outbound.append(request) or httpx.Response(500)))
+    main.app.state.laya = fake_router(family='none')
+    calls = []
+    main.app.state.llm = fake_model(calls=calls)
+    result = send(client, new_conversation(client), request_id='search-disabled-001',
+                  message='Search the web for the latest Keno-B news.').json()
+    assert result['reply'] == 'Web search is off. Enable Search in Tools, then tell me what to look up.'
+    assert result['context']['answer_source'] == 'web_search_guard'
+    assert result['context']['available_tools'] == []
+    assert outbound == []
+    assert not any(path == '/v1/chat/completions' for path, _ in calls)
+
+
 def test_weather_disabled_never_generates_fabricated_conditions(client):
     main.app.state.laya=fake_router(family='none')
     calls=[]

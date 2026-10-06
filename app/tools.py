@@ -16,6 +16,47 @@ FOLLOWUP_SAVE = re.compile(r"^(?:please\s+)?(?:save|remember|simpan|ingat)(?:\s+
 # Detect an explicit firsthand save request for acknowledgement and required
 # save planning on Laya's memory route. This does not extract or write a fact.
 FIRSTHAND_SAVE = re.compile(r"^(?:please\s+)?(?:remember|save|simpan|ingat)\s+(?:that\s+)?(?:my\b|i\b|i'm\b|the\s+fact\b|nama\s+saya\b|saya\b)", re.I)
+BARE_WEB_SEARCH = re.compile(
+    r"^\s*(?:please\s+)?(?:search(?:\s+(?:from|on))?\s+(?:google|the\s+web|web|online)|"
+    r"search\s+online|google|web\s+search|look\s+up(?:\s+online)?)\s*[?.!]*$", re.I)
+WEB_SEARCH_QUERY = re.compile(
+    r"^\s*(?:please\s+)?(?:"
+    r"search(?:\s+(?:from|on))?\s+(?:google|the\s+web|web|online)\s+(?:for\s+)?|"
+    r"search\s+(?:for\s+)?|google\s+(?:for\s+)?|look\s+up\s+(?:online\s+)?"
+    r")(?P<query>\S.{0,299}?)\s*[?.!]*$", re.I)
+SEARCH_FOLLOWUP_SKIP = re.compile(
+    r"^\s*(?:thanks|thank\s+you|ok|okay|yes|yeah|yep|no|cancel|stop|never\s*mind)\s*[?.!]*$", re.I)
+LOCAL_SEARCH_TARGET = re.compile(
+    r"\b(?:my\s+)?(?:memory|memories|saved\s+facts?|profile|library|documents?|files?|attachments?|notes?|"
+    r"chats?|conversations?|history)\b", re.I)
+EXPLICIT_WEB_PREFIX = re.compile(
+    r"^\s*(?:please\s+)?(?:search(?:\s+(?:from|on))?\s+(?:google|the\s+web|web|online)|"
+    r"google|look\s+up\s+online)\b", re.I)
+
+
+def bare_web_search(text):
+    return isinstance(text, str) and bool(BARE_WEB_SEARCH.fullmatch(text.strip()))
+
+
+def explicit_web_search(text):
+    if not isinstance(text, str) or bare_web_search(text):
+        return None
+    match = WEB_SEARCH_QUERY.fullmatch(text)
+    if not match:
+        return None
+    if LOCAL_SEARCH_TARGET.search(text) and not EXPLICIT_WEB_PREFIX.search(text):
+        return None
+    query = match.group("query").strip()
+    return query if query and re.search(r"\w", query) else None
+
+
+def web_search_followup(text, previous):
+    if not isinstance(text, str) or not bare_web_search(previous):
+        return None
+    query = text.strip()
+    if not query or len(query) > 300 or bare_web_search(query) or SEARCH_FOLLOWUP_SKIP.fullmatch(query):
+        return None
+    return query if re.search(r"\w", query) else None
 
 
 def explicit_name_save(text):
@@ -193,6 +234,7 @@ class ToolSession:
         self.db, self.now, self.lookup = db, now, lookup
         self.mutations, self.events, self.sources, self.web_sources = [], [], [], []
         self.weather_results, self.weather_city = [], None
+        self.search_results = []
 
     def rows(self, query=""):
         with self.db() as c:
@@ -282,6 +324,9 @@ class ToolSession:
             if name == "weather":
                 if not isinstance(result.get("current"), dict): raise ToolValidationError("Invalid weather result")
                 self.weather_results.append({"city": text, "result": result})
+            else:
+                if not isinstance(result.get("results"), list): raise ToolValidationError("Invalid web search result")
+                self.search_results.append({"query": text, "result": result})
             self.web_sources.extend(result.get("sources", []))
             return result
         raise ToolValidationError("Tool is not implemented")
@@ -334,6 +379,21 @@ def weather_reply(session, metadata):
         reply += " Source: Open-Meteo. Model-based weather estimate."
         replies.append(reply)
     return '\n'.join(replies)
+
+
+def web_search_reply(session, metadata=None):
+    policy = (metadata or {}).get("route", {}).get("tool_policy")
+    if policy == "web_search_needs_query":
+        return "What would you like me to search for?"
+    if policy not in {"explicit_web_search", "web_search_followup"}:
+        return None
+    if not session.settings["search_enabled"]:
+        return "Web search is off. Enable Search in Tools, then tell me what to look up."
+    if not session.search_results:
+        return "I couldn't retrieve web search results. Check that the lookup service is running and try again."
+    if not any(item["result"].get("results") for item in session.search_results):
+        return "I couldn't find any web results for that search."
+    return None
 
 
 def memory_reply(session, metadata=None):

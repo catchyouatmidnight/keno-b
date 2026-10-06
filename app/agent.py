@@ -31,8 +31,10 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         direct_save = natural[1]
     direct_forget = natural[1] if natural and natural[0] == 'memory_forget' else None
     direct_calculation = tools.explicit_calculation(session.value.message) if "calculator" in allowed and metadata.get("route", {}).get("tool_policy") == "explicit_calculation" else None
-    metadata['tool_planning_mode'] = 'natural_memory' if natural else 'explicit_name_save' if name_save else 'explicit_field_save' if direct_save else 'explicit_calculation' if direct_calculation else 'model'
-    planner_thinking = bool(metadata.get('route', {}).get('thinking', False)) and not required_save
+    direct_web = metadata.get("route", {}).get("web_search_query") if "web_search" in allowed and metadata.get("route", {}).get("tool_policy") in {"explicit_web_search", "web_search_followup"} else None
+    direct_web = direct_web if isinstance(direct_web, str) and direct_web.strip() else None
+    metadata['tool_planning_mode'] = 'natural_memory' if natural else 'explicit_name_save' if name_save else 'explicit_field_save' if direct_save else 'explicit_calculation' if direct_calculation else 'explicit_web_search' if direct_web else 'model'
+    planner_thinking = bool(metadata.get('route', {}).get('thinking', False)) and not required_save and not direct_web
     planner_budget = metadata.get('thinking_budget', 0) if planner_thinking else 0
     metadata['tool_thinking_budget'] = planner_budget
     if direct_save:
@@ -64,7 +66,31 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         session.events.append(event)
         metadata['_calculation_reply'] = f"{result['expression']} = {result['result']}."
         yield 'tool', event
-    for round_number in range(0 if direct_save or direct_forget or direct_calculation else tools.MAX_ROUNDS):
+    if direct_web:
+        event = {'name': 'web_search', 'status': 'running', 'index': 1}
+        yield 'tool', event
+        execution_started = time.monotonic()
+        args = {'query': direct_web}
+        try:
+            result = await session.execute('web_search', args)
+            status = 'complete'
+        except (ValueError, TypeError, KeyError, SyntaxError, ArithmeticError, httpx.HTTPError) as error:
+            detail = str(error) if isinstance(error, tools.ToolValidationError) else "Tool failed validation or is unavailable. Do not claim it succeeded."
+            result = {'error': detail}
+            status = 'failed'
+        execution_seconds = time.monotonic() - execution_started
+        result_event = {**event, 'status': status}
+        if status == 'failed':
+            result_event['detail'] = result['error']
+        session.events.append(result_event)
+        yield 'tool', result_event
+        if status == 'complete':
+            call_id = 'keno_direct_web_1'
+            messages.append({'role': 'assistant', 'content': '', 'tool_calls': [{
+                'id': call_id, 'type': 'function',
+                'function': {'name': 'web_search', 'arguments': json.dumps(args, ensure_ascii=False)}}]})
+            messages.append({'role': 'tool', 'tool_call_id': call_id, 'content': json.dumps(result, ensure_ascii=False)})
+    for round_number in range(0 if direct_save or direct_forget or direct_calculation or direct_web else tools.MAX_ROUNDS):
         await check_budget(messages, metadata, request_definitions)
         planning_started = time.monotonic()
         response = await client.post("/v1/chat/completions", json={

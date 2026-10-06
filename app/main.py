@@ -472,6 +472,10 @@ async def fit_context(value, route=None, attachments=None):
     route = dict(route or {"thinking": False, "vision": False})
     attachments = attachments or []
     definitions = tools.catalog(route.get("tool_family", "none"), setting("tools"), value.message, attachments)
+    if route.get("tool_policy") in {"explicit_web_search", "web_search_followup"}:
+        definitions = [d for d in definitions if d["function"]["name"] == "web_search"]
+    elif route.get("tool_policy") == "web_search_needs_query":
+        definitions = []
     direct_document = bool(attachments) and (
         route.get("decisions", {}).get("tool_need", {}).get("choice") == "answer"
         or route.get("tool_family", "none") in {"none", "documents"})
@@ -714,7 +718,8 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                 yield name, data
         planner_reply = metadata.pop("_planner_reply", None)
         calculation_guarded = metadata.pop("_calculation_reply", None)
-        guarded = calendar_guarded or calculation_guarded or tools.weather_reply(session, metadata)
+        search_guarded = tools.web_search_reply(session, metadata)
+        guarded = calendar_guarded or calculation_guarded or search_guarded or tools.weather_reply(session, metadata)
         memory_guarded = tools.memory_reply(session, metadata) if guarded is None else None
         if memory_guarded is not None: guarded = memory_guarded
         if guarded is not None: name_guarded = None
@@ -725,6 +730,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                                         "saved_field_guard" if field_guarded is not None and name_guarded is not None else
                                         "user_name_guard" if name_guarded is not None else
                                         "calculator_tool" if calculation_guarded is not None else
+                                        "web_search_guard" if search_guarded is not None else
                                         "memory_guard" if memory_guarded is not None else
                                         "weather_tool" if session.weather_results else "weather_guard")
             metadata["first_token_seconds"] = round(time.monotonic() - request_started, 3)
@@ -859,8 +865,18 @@ async def chat(value: ChatInput):
         with db() as c:
             prior = c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 2", (value.conversation_id,)).fetchall()
         history = "\n".join(str(t[0])[:300] for t in reversed(prior))
+        previous_user = str(prior[0][0]) if prior else ""
         calendar_result = calendar_tools.calculate(value.message,[str(t[0]) for t in prior]) if not attachments else None
         route = await routing.decide(app.state.laya, value.message, history, attachments)
+        if not attachments:
+            search_query = tools.explicit_web_search(value.message)
+            search_followup = tools.web_search_followup(value.message, previous_user)
+            if tools.bare_web_search(value.message):
+                route.update(tool_family="none", tool_policy="web_search_needs_query", thinking=False, effort_policy="explicit_search_clarify_quick")
+            elif search_query:
+                route.update(tool_family="live", tool_policy="explicit_web_search", web_search_query=search_query)
+            elif search_followup:
+                route.update(tool_family="live", tool_policy="web_search_followup", web_search_query=search_followup)
         # Explicit user actions outrank a probabilistic answer/action label.
         # Preserve the raw Laya decision so disagreements stay observable.
         if not attachments and not tools.NO_SAVE.search(value.message) and not tools.FORGET_REQUEST.search(value.message):
