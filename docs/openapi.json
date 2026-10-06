@@ -824,117 +824,16 @@
           "401": {
             "description": "Missing/invalid bearer key"
           },
-          "423": {
-            "description": "Vault locked"
+          "503": {
+            "description": "Document key unavailable/mismatched, legacy migration required, or local model unavailable"
           }
         },
         "security": [
           {
             "HTTPBearer": []
           }
-        ]
-      }
-    },
-    "/api/v1/library/setup": {
-      "post": {
-        "tags": [
-          "Encrypted document library"
         ],
-        "summary": "Vault setup",
-        "responses": {
-          "200": {
-            "description": "Successful vault operation"
-          },
-          "401": {
-            "description": "Missing/invalid bearer key"
-          },
-          "423": {
-            "description": "Vault locked"
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/VaultPassword"
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
-    "/api/v1/library/unlock": {
-      "post": {
-        "tags": [
-          "Encrypted document library"
-        ],
-        "summary": "Vault unlock",
-        "responses": {
-          "200": {
-            "description": "Successful vault operation"
-          },
-          "401": {
-            "description": "Missing/invalid bearer key"
-          },
-          "423": {
-            "description": "Vault locked"
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/VaultPassword"
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
-    "/api/v1/library/lock": {
-      "post": {
-        "tags": [
-          "Encrypted document library"
-        ],
-        "summary": "Vault lock",
-        "responses": {
-          "200": {
-            "description": "Successful vault operation"
-          },
-          "401": {
-            "description": "Missing/invalid bearer key"
-          },
-          "423": {
-            "description": "Vault locked"
-          }
-        },
-        "parameters": [
-          {
-            "name": "x-keno-vault",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Short-lived unlock token"
-          }
-        ],
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
+        "parameters": []
       }
     },
     "/api/v1/library/documents": {
@@ -950,20 +849,11 @@
           "401": {
             "description": "Missing/invalid bearer key"
           },
-          "423": {
-            "description": "Vault locked"
+          "503": {
+            "description": "Document key unavailable/mismatched, legacy migration required, or local model unavailable"
           }
         },
-        "parameters": [
-          {
-            "name": "x-keno-vault",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Short-lived unlock token"
-          }
-        ],
+        "parameters": [],
         "security": [
           {
             "HTTPBearer": []
@@ -982,20 +872,11 @@
           "401": {
             "description": "Missing/invalid bearer key"
           },
-          "423": {
-            "description": "Vault locked"
+          "503": {
+            "description": "Document key unavailable/mismatched, legacy migration required, or local model unavailable"
           }
         },
-        "parameters": [
-          {
-            "name": "x-keno-vault",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Short-lived unlock token"
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -1026,20 +907,11 @@
           "401": {
             "description": "Missing/invalid bearer key"
           },
-          "423": {
-            "description": "Vault locked"
+          "503": {
+            "description": "Document key unavailable/mismatched, legacy migration required, or local model unavailable"
           }
         },
-        "parameters": [
-          {
-            "name": "x-keno-vault",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Short-lived unlock token"
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -1070,20 +942,11 @@
           "401": {
             "description": "Missing/invalid bearer key"
           },
-          "423": {
-            "description": "Vault locked"
+          "503": {
+            "description": "Document key unavailable/mismatched, legacy migration required, or local model unavailable"
           }
         },
-        "parameters": [
-          {
-            "name": "x-keno-vault",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Short-lived unlock token"
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -1114,19 +977,11 @@
           "401": {
             "description": "Missing/invalid bearer key"
           },
-          "423": {
-            "description": "Vault locked"
+          "503": {
+            "description": "Document key unavailable/mismatched, legacy migration required, or local model unavailable"
           }
         },
         "parameters": [
-          {
-            "name": "x-keno-vault",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Short-lived unlock token"
-          },
           {
             "name": "document_id",
             "in": "path",
@@ -1156,19 +1011,11 @@
           "401": {
             "description": "Missing/invalid bearer key"
           },
-          "423": {
-            "description": "Vault locked"
+          "503": {
+            "description": "Document key unavailable/mismatched, legacy migration required, or local model unavailable"
           }
         },
         "parameters": [
-          {
-            "name": "x-keno-vault",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Short-lived unlock token"
-          },
           {
             "name": "document_id",
             "in": "path",
@@ -1477,21 +1324,6 @@
           "type"
         ],
         "title": "ValidationError"
-      },
-      "VaultPassword": {
-        "properties": {
-          "password": {
-            "maxLength": 200,
-            "minLength": 12,
-            "title": "Password",
-            "type": "string"
-          }
-        },
-        "required": [
-          "password"
-        ],
-        "title": "Password",
-        "type": "object"
       },
       "VaultImport": {
         "properties": {

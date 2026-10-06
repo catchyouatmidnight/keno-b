@@ -26,6 +26,7 @@ services:
     environment:
       KENO_API_KEY: ${KENO_API_KEY:?Run bash scripts/setup.sh first}
       KENO_DB: /data/keno.db
+      KENO_DOCUMENT_KEY: ${KENO_DOCUMENT_KEY:-}
       LLM_URL: http://llm:8080
       LLM_MODEL: ${MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
       CONTEXT_SIZE: ${CONTEXT_SIZE:-8192}

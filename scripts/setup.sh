@@ -13,6 +13,11 @@ if [[ ! -e .env ]]; then
 else
   echo 'Keeping existing .env and personal data.'
 fi
+if [[ -d data && ( ! -r data || ! -x data ) ]]; then
+  sudo python3 scripts/document-key.py
+else
+  python3 scripts/document-key.py
+fi
 chmod 600 .env
 # Container runs as UID 10001. Never reset or replace existing data.
 if [[ $(stat -c '%u' data) != 10001 ]]; then

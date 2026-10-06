@@ -32,14 +32,6 @@
       "value": ""
     },
     {
-      "key": "vault_password",
-      "value": ""
-    },
-    {
-      "key": "vault_token",
-      "value": ""
-    },
-    {
       "key": "document_base64",
       "value": ""
     }
@@ -399,17 +391,13 @@
       }
     },
     {
-      "name": "Encrypted document vault",
+      "name": "Automatically encrypted documents",
       "item": [
         {
           "name": "Vault status",
           "request": {
             "method": "GET",
             "header": [
-              {
-                "key": "X-Keno-Vault",
-                "value": "{{vault_token}}"
-              },
               {
                 "key": "Content-Type",
                 "value": "application/json"
@@ -419,105 +407,10 @@
           }
         },
         {
-          "name": "Set up vault",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "X-Keno-Vault",
-                "value": "{{vault_token}}"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": "{{base_url}}/api/v1/library/setup",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"password\": \"{{vault_password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (pm.response.code === 200) pm.collectionVariables.set(\"vault_token\", pm.response.json().vault_token);"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Unlock vault",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "X-Keno-Vault",
-                "value": "{{vault_token}}"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": "{{base_url}}/api/v1/library/unlock",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"password\": \"{{vault_password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (pm.response.code === 200) pm.collectionVariables.set(\"vault_token\", pm.response.json().vault_token);"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Lock vault",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "X-Keno-Vault",
-                "value": "{{vault_token}}"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": "{{base_url}}/api/v1/library/lock"
-          }
-        },
-        {
           "name": "List documents",
           "request": {
             "method": "GET",
             "header": [
-              {
-                "key": "X-Keno-Vault",
-                "value": "{{vault_token}}"
-              },
               {
                 "key": "Content-Type",
                 "value": "application/json"
@@ -531,10 +424,6 @@
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "X-Keno-Vault",
-                "value": "{{vault_token}}"
-              },
               {
                 "key": "Content-Type",
                 "value": "application/json"
@@ -558,10 +447,6 @@
             "method": "POST",
             "header": [
               {
-                "key": "X-Keno-Vault",
-                "value": "{{vault_token}}"
-              },
-              {
                 "key": "Content-Type",
                 "value": "application/json"
               }
@@ -583,10 +468,6 @@
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "X-Keno-Vault",
-                "value": "{{vault_token}}"
-              },
               {
                 "key": "Content-Type",
                 "value": "application/json"

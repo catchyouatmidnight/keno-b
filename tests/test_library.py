@@ -2,19 +2,18 @@
 import base64
 import io
 import json
+import os
 import zipfile
 import httpx
 import pytest
 from app import main,library,library_extract
 from test_backend import client,fake_router
-PASSWORD='vault-password-test-123'
+DOCUMENT_KEY="ab"*32
 
 @pytest.fixture
-def unlocked(client):
-    library.vault().lock();main.app.state.vault=library.Vault()
-    client.headers['X-Keno-Vault']=client.post('/api/v1/library/setup',json={'password':PASSWORD}).json()['vault_token']
+def documents_client(client,monkeypatch):
+    monkeypatch.setenv('KENO_DOCUMENT_KEY',DOCUMENT_KEY)
     yield client
-    library.vault().lock()
 
 
 def upload(client,text='Confidential orchid budget is 7402.',name='private-orchid.txt',**kwargs):
@@ -22,9 +21,9 @@ def upload(client,text='Confidential orchid budget is 7402.',name='private-orchi
     return client.post('/api/v1/library/documents',json={'name':name,'data_base64':base64.b64encode(raw).decode(),'embed':False,**kwargs})
 
 
-def test_ciphertext_restart_backup_and_original(unlocked):
+def test_ciphertext_restart_backup_and_original(documents_client):
     from scripts.database import snapshot,validate
-    c=unlocked;result=upload(c);assert result.status_code==200,result.text
+    c=documents_client;result=upload(c);assert result.status_code==200,result.text
     doc=result.json()['id'];original=b'Confidential orchid budget is 7402.'
     assert c.get(f'/api/v1/library/documents/{doc}/download').content==original
     snapshot(main.DB_PATH,main.DB_PATH.parent/'backup.db');validate(main.DB_PATH.parent/'backup.db')
@@ -33,31 +32,31 @@ def test_ciphertext_restart_backup_and_original(unlocked):
             payload=db.execute('SELECT payload FROM '+table).fetchone()[0]
             assert b'orchid' not in payload and b'7402' not in payload
     for file in main.DB_PATH.parent.glob('keno.db*'):assert original not in file.read_bytes()
-    library.vault().lock();main.app.state.vault=library.Vault()
-    assert c.get('/api/v1/library/documents').status_code==423
-    assert c.post('/api/v1/library/unlock',json={'password':'incorrect-password-123'}).status_code==403
-    c.headers['X-Keno-Vault']=c.post('/api/v1/library/unlock',json={'password':PASSWORD}).json()['vault_token']
+    os.environ.pop('KENO_DOCUMENT_KEY')
+    assert c.get('/api/v1/library/documents').status_code==503
+    os.environ['KENO_DOCUMENT_KEY']='cd'*32
+    assert c.get('/api/v1/library/documents').status_code==503
+    os.environ['KENO_DOCUMENT_KEY']=DOCUMENT_KEY
     assert c.get('/api/v1/library/documents').json()[0]['name']=='private-orchid.txt'
     assert c.post('/api/v1/library/search',json={'question':'orchid budget','mode':'keyword'}).json()['excerpts'][0]['source_id']=='S1'
-    c.post('/api/v1/library/lock')
-    assert c.get(f'/api/v1/library/documents/{doc}/download').status_code==423
-    assert c.post('/api/v1/library/search',json={'question':'budget','mode':'keyword'}).status_code==423
+    assert c.get(f'/api/v1/library/documents/{doc}/download').content==original
+    assert c.post('/api/v1/library/unlock',json={'password':'anything'}).status_code==404
 
 
-def test_reindex_replace_delete_and_tamper(unlocked,monkeypatch):
+def test_reindex_replace_delete_and_tamper(documents_client,monkeypatch):
     async def vectors(texts,kind):return [[1.0]+[0.0]*383 for _ in texts]
     monkeypatch.setattr(library,'embed',vectors)
-    first=upload(unlocked).json();assert upload(unlocked).json()['duplicate'] is True
-    indexed=upload(unlocked,replace_id=first['id'],embed=True).json()
+    first=upload(documents_client).json();assert upload(documents_client).json()['duplicate'] is True
+    indexed=upload(documents_client,replace_id=first['id'],embed=True).json()
     assert indexed['version']==2 and indexed['embedding_model']==library.MODEL
-    assert unlocked.post('/api/v1/library/search',json={'question':'budget'}).status_code==200
-    assert upload(unlocked,'New budget 9400.',replace_id=first['id']).json()['version']==3
-    assert b'9400' in unlocked.get('/api/v1/library/documents/'+first['id']+'/download').content
+    assert documents_client.post('/api/v1/library/search',json={'question':'budget'}).status_code==200
+    assert upload(documents_client,'New budget 9400.',replace_id=first['id']).json()['version']==3
+    assert b'9400' in documents_client.get('/api/v1/library/documents/'+first['id']+'/download').content
     with main.db() as db:
         data=bytearray(db.execute('SELECT payload FROM vault_documents').fetchone()[0]);data[-1]^=1
         db.execute('UPDATE vault_documents SET payload=?',(bytes(data),))
-    assert unlocked.get('/api/v1/library/documents').status_code==422
-    assert unlocked.delete('/api/v1/library/documents/'+first['id']).status_code==200
+    assert documents_client.get('/api/v1/library/documents').status_code==422
+    assert documents_client.delete('/api/v1/library/documents/'+first['id']).status_code==200
     with main.db() as db:assert db.execute('SELECT count(*) FROM vault_originals').fetchone()[0]==0
 
 
@@ -70,22 +69,22 @@ def model(answer,calls):
     return httpx.AsyncClient(base_url='http://llm:8080',transport=httpx.MockTransport(handler))
 
 
-def test_ask_routing_and_no_plaintext_history(unlocked):
-    upload(unlocked);seen=[];calls=[]
+def test_ask_routing_and_no_plaintext_history(documents_client):
+    upload(documents_client);seen=[];calls=[]
     main.app.state.laya=fake_router(seen=seen);main.app.state.llm=model('Budget is 7402. [S1]',calls)
-    result=unlocked.post('/api/v1/library/ask',json={'question':'budget','mode':'keyword'})
+    result=documents_client.post('/api/v1/library/ask',json={'question':'budget','mode':'keyword'})
     assert result.status_code==200,result.text
     assert result.json()['history_saved'] is False and result.json()['citations_present']
     assert len(seen)==1 and set(seen[0]['questions'])=={'thinking','document_scope'}
     assert len([c for c in calls if c[0]=='/v1/chat/completions'])==1
-    assert unlocked.get('/api/v1/conversations').json()==[] and unlocked.get('/api/v1/memories').json()==[]
+    assert documents_client.get('/api/v1/conversations').json()==[] and documents_client.get('/api/v1/memories').json()==[]
     main.app.state.llm=model('Invalid [S99]',[])
-    assert unlocked.post('/api/v1/library/ask',json={'question':'budget','mode':'keyword'}).status_code==502
+    assert documents_client.post('/api/v1/library/ask',json={'question':'budget','mode':'keyword'}).status_code==502
 
 
-def test_upload_limits(unlocked):
-    assert upload(unlocked,'a'*1_100_000).status_code==422
-    assert upload(unlocked,'abc','shortcut.gdoc').status_code==422
+def test_upload_limits(documents_client):
+    assert upload(documents_client,'a'*1_100_000).status_code==422
+    assert upload(documents_client,'abc','shortcut.gdoc').status_code==422
 
 
 def test_office_extractors():

@@ -7,7 +7,6 @@ import math
 import os
 import re
 import secrets
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -15,14 +14,14 @@ from urllib.parse import quote
 import httpx
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from fastapi import APIRouter, Header, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 from . import library_extract, routing, documents
 
 router=APIRouter(prefix='/api/v1/library',tags=['Encrypted document library'])
 MODEL='Xenova/multilingual-e5-small'
-TTL=900
+KEY_MARKER=b'env-key-v1'
+KEY_CHECK=b'keno-document-key-v1'
 
 
 def main():
@@ -47,45 +46,25 @@ def unseal(key,data,aad):
     except (InvalidTag,ValueError):raise HTTPException(422,'Encrypted data failed authentication')
 
 
-def derive(password,salt):
-    return Scrypt(salt=salt,length=32,n=32768,r=8,p=1).derive(password.encode())
-
-
-class Vault:
-    def __init__(self):
-        self.key=None;self.token=None;self.expires=0;self.failures=0;self.blocked=0;self.timer=None
-        self.mutex=threading.RLock()
-    def lock(self):
-        with self.mutex:
-            if self.timer:self.timer.cancel()
-            self.timer=None;self.key=None;self.token=None;self.expires=0
-    def arm(self):
-        if self.timer:self.timer.cancel()
-        token=self.token
-        def expire():
-            with self.mutex:
-                if self.token==token and time.monotonic()>=self.expires:self.lock()
-        self.timer=threading.Timer(TTL,expire);self.timer.daemon=True;self.timer.start()
-    def require(self,token):
-        with self.mutex:
-            if time.monotonic()>self.expires:self.lock()
-            if not self.key or not token or not secrets.compare_digest(token,self.token):
-                raise HTTPException(423,'Unlock the document vault first')
-            self.expires=time.monotonic()+TTL;self.arm()
-            return self.key
-    def open(self,key):
-        with self.mutex:
-            self.key=key;self.token=secrets.token_urlsafe(32);self.expires=time.monotonic()+TTL;self.arm()
-            return {'vault_token':self.token,'idle_timeout_seconds':TTL}
-
-
-def vault():
-    if not hasattr(main().app.state,'vault'):main().app.state.vault=Vault()
-    return main().app.state.vault
-
-
-class Password(BaseModel):
-    password:str=Field(min_length=12,max_length=200)
+def document_key():
+    value=os.environ.get('KENO_DOCUMENT_KEY','')
+    if not re.fullmatch(r'[0-9a-fA-F]{64}',value):
+        raise HTTPException(503,'Configure KENO_DOCUMENT_KEY using scripts/document-key.py')
+    key=bytes.fromhex(value)
+    initialize()
+    with main().db() as c:
+        row=c.execute('SELECT salt,wrapped FROM vault_config WHERE id=1').fetchone()
+        if row is None:
+            if c.execute('SELECT 1 FROM vault_documents LIMIT 1').fetchone():
+                raise HTTPException(503,'Document encryption metadata missing; restore a complete backup')
+            c.execute('INSERT INTO vault_config VALUES (1,?,?)',(KEY_MARKER,seal(key,KEY_CHECK,'keno-document-key-check-v1')))
+        elif row[0]!=KEY_MARKER:
+            raise HTTPException(503,'Legacy password library requires scripts/document-key.py --migrate-legacy with backend stopped')
+        else:
+            try: valid=unseal(key,row[1],'keno-document-key-check-v1')==KEY_CHECK
+            except HTTPException: valid=False
+            if not valid:raise HTTPException(503,'KENO_DOCUMENT_KEY does not match this library; restore its original key')
+    return key
 
 
 class Import(BaseModel):
@@ -104,42 +83,9 @@ class Query(BaseModel):
 
 @router.get('/status')
 def status():
-    initialize()
-    if time.monotonic()>vault().expires:vault().lock()
-    with main().db() as c:configured=bool(c.execute('SELECT 1 FROM vault_config').fetchone())
-    return {'configured':configured,'unlocked':bool(vault().key),'single_owner':True,'formats':sorted(library_extract.SUPPORTED),'encryption':'AES-256-GCM; server can decrypt while unlocked'}
-
-
-@router.post('/setup')
-async def setup(value:Password):
-    initialize();key=os.urandom(32);salt=os.urandom(16)
-    derived=await asyncio.to_thread(derive,value.password,salt)
-    with main().db() as c:
-        if c.execute('SELECT 1 FROM vault_config').fetchone():raise HTTPException(409,'Vault already configured')
-        c.execute('INSERT INTO vault_config VALUES (1,?,?)',(salt,seal(derived,key,'keno-vault-key-v1')))
-    return vault().open(key)
-
-
-@router.post('/unlock')
-async def unlock(value:Password):
-    initialize();state=vault()
-    if time.monotonic()<state.blocked:raise HTTPException(429,'Wait before trying the vault password again')
-    with main().db() as c:row=c.execute('SELECT salt,wrapped FROM vault_config').fetchone()
-    if not row:raise HTTPException(409,'Set up the vault first')
-    derived=await asyncio.to_thread(derive,value.password,row[0])
-    try:key=unseal(derived,row[1],'keno-vault-key-v1')
-    except HTTPException:
-        state.failures+=1
-        if state.failures>=5:state.blocked=time.monotonic()+60;state.failures=0
-        raise HTTPException(403,'Incorrect vault password')
-    state.failures=0
-    return state.open(key)
-
-
-@router.post('/lock')
-def lock(x_keno_vault:str|None=Header(default=None)):
-    vault().require(x_keno_vault);vault().lock()
-    return {'locked':True}
+    try:document_key();ready=True;detail=None
+    except HTTPException as error:ready=False;detail=error.detail
+    return {'configured':ready,'ready':ready,'detail':detail,'single_owner':True,'formats':sorted(library_extract.SUPPORTED),'encryption':'Automatic AES-256-GCM with KENO_DOCUMENT_KEY; server can decrypt','manual_unlock':False}
 
 
 def records(key,ids=None):
@@ -154,8 +100,8 @@ def public(record):
 
 
 @router.get('/documents')
-def listing(x_keno_vault:str|None=Header(default=None)):
-    return [public(r) for r in records(vault().require(x_keno_vault))]
+def listing():
+    return [public(r) for r in records(document_key())]
 
 
 async def embed(texts,kind):
@@ -177,8 +123,8 @@ async def embed(texts,kind):
 
 
 @router.post('/documents')
-async def import_document(value:Import,x_keno_vault:str|None=Header(default=None)):
-    key=vault().require(x_keno_vault)
+async def import_document(value:Import):
+    key=document_key()
     if main().app.state.generation_lock.locked():raise HTTPException(409,'Wait for the active operation')
     async with main().app.state.generation_lock:
         try:raw=base64.b64decode(value.data_base64,validate=True)
@@ -198,7 +144,7 @@ async def import_document(value:Import,x_keno_vault:str|None=Header(default=None
         record={**extracted,'id':previous['id'] if previous else str(uuid.uuid4()),'name':name,'checksum':checksum,'version':previous['version']+1 if previous else 1,'vectors':vectors,'embedding_model':MODEL if vectors else None}
         encrypted=seal(key,json.dumps(record,ensure_ascii=False).encode(),'document:'+record['id'])
         original=seal(key,raw,'original:'+record['id'])
-        vault().require(x_keno_vault)
+        document_key()
         with main().db() as c:
             size=sum(c.execute('SELECT COALESCE(SUM(length(payload)),0) FROM '+table+' WHERE id!=?',(record['id'],)).fetchone()[0] for table in ('vault_documents','vault_originals'))
             if size+len(encrypted)+len(original)>96*1024*1024:raise HTTPException(422,'Vault storage limit: 96 MB encrypted payloads')
@@ -208,8 +154,8 @@ async def import_document(value:Import,x_keno_vault:str|None=Header(default=None
 
 
 @router.delete('/documents/{document_id}')
-def remove(document_id:str,x_keno_vault:str|None=Header(default=None)):
-    vault().require(x_keno_vault)
+def remove(document_id:str):
+    document_key()
     if main().app.state.generation_lock.locked():raise HTTPException(409,'Wait for the active operation')
     with main().db() as c:
         if not c.execute('DELETE FROM vault_documents WHERE id=?',(document_id,)).rowcount:raise HTTPException(404,'Document not found')
@@ -217,8 +163,8 @@ def remove(document_id:str,x_keno_vault:str|None=Header(default=None)):
 
 
 @router.get('/documents/{document_id}/download')
-def download(document_id:str,x_keno_vault:str|None=Header(default=None)):
-    key=vault().require(x_keno_vault);r=records(key,[document_id])[0]
+def download(document_id:str):
+    key=document_key();r=records(key,[document_id])[0]
     with main().db() as c:row=c.execute('SELECT payload FROM vault_originals WHERE id=?',(document_id,)).fetchone()
     if not row:raise HTTPException(422,'Encrypted original unavailable')
     return Response(unseal(key,row[0],'original:'+document_id),media_type='application/octet-stream',headers={'Content-Disposition':"attachment; filename*=UTF-8''"+quote(r['name'],safe=''),'Cache-Control':'no-store'})
@@ -253,15 +199,15 @@ async def retrieve(key,value,overview=False):
 
 
 @router.post('/search')
-async def search(value:Query,x_keno_vault:str|None=Header(default=None)):
-    key=vault().require(x_keno_vault);excerpts,coverage=await retrieve(key,value)
-    vault().require(x_keno_vault)
+async def search(value:Query):
+    key=document_key();excerpts,coverage=await retrieve(key,value)
+    document_key()
     return {'excerpts':excerpts,'coverage':coverage,'mode':value.mode}
 
 
 @router.post('/ask')
-async def ask(value:Query,x_keno_vault:str|None=Header(default=None)):
-    key=vault().require(x_keno_vault)
+async def ask(value:Query):
+    key=document_key()
     if main().app.state.generation_lock.locked():raise HTTPException(409,'Wait for the active operation')
     async with main().app.state.generation_lock:
         start=time.monotonic()
@@ -288,5 +234,5 @@ async def ask(value:Query,x_keno_vault:str|None=Header(default=None)):
         if not isinstance(answer,str):raise HTTPException(502,'Invalid local model answer')
         cited=set(re.findall(r'\[(S\d+)\]',answer));valid={s['source_id'] for s in excerpts}
         if not answer.strip() or not cited<=valid:raise HTTPException(502,'Answer empty or cited unavailable evidence')
-        vault().require(x_keno_vault)
+        document_key()
         return {'reply':answer,'sources':excerpts,'coverage':coverage,'citations_present':bool(cited),'truncated':choice.get('finish_reason')=='length','seconds':round(time.monotonic()-start,3),'route':route,'history_saved':False,'note':'Citations do not certify factual accuracy; overview is a bounded sample'}
