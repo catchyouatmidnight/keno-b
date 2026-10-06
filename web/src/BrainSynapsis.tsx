@@ -1,3 +1,4 @@
+import {useEffect,useState} from 'react';
 import {Activity,BrainCircuit,Database,Eye,MessageSquareText} from 'lucide-react';
 import {useLab,type CognitivePhase} from './store';
 
@@ -94,15 +95,19 @@ function BrainMap({active}:{active:CognitivePhase}){
  </div>;
 }
 
+function stagePhase(stage:string):CognitivePhase{return stage==='reasoning'||stage==='route_started'||stage==='tool'?'thinking':stage==='retrieval'||stage==='vision'?'occipital':stage==='memory_search'||stage==='memory_save'?'memory':stage==='generation'?'responding':'idle';}
+
 export default function BrainSynapsis(){
- const {cognitive,status}=useLab();
+ const {cognitive,status,api}=useLab();
+ const [live,setLive]=useState<{stage:string;detail:string;intensity:number;at?:string}|null>(null);
+ useEffect(()=>{const control=new AbortController();let buffer='';async function listen(){try{const response=await api.fetch('/cognitive',{signal:control.signal});if(!response.body)return;const reader=response.body.getReader(),decoder=new TextDecoder();while(!control.signal.aborted){const chunk=await reader.read();if(chunk.done)break;buffer+=decoder.decode(chunk.value,{stream:true});for(;;){const end=buffer.indexOf('\n\n');if(end<0)break;const block=buffer.slice(0,end);buffer=buffer.slice(end+2);const type=block.match(/^event:\s*(.+)$/m)?.[1];const raw=block.match(/^data:\s*(.+)$/m)?.[1];if(type==='cognitive'&&raw){try{setLive(JSON.parse(raw));}catch{}}}}}catch(e){if(!control.signal.aborted)console.debug('cognitive stream unavailable',e);}}void listen();return()=>control.abort();},[api]);
  const stale=Date.now()-cognitive.updated_at>120000;
- const phase:CognitivePhase=status?.generating&&stale?'thinking':stale?'idle':cognitive.phase;
+ const phase:CognitivePhase=live?stagePhase(live.stage):(status?.generating&&stale?'thinking':stale?'idle':cognitive.phase);
  const current=lobes.find(l=>l.phase===phase);
  return <div className="brain-page"><div className="brain-layout">
   <section className="brain-hero">
    <div className="brain-kicker">COGNITIVE ENGINE</div>
-   <div className="brain-heading"><div><h1>Brain Synapsis</h1><p>Live cognitive activity map</p></div><div className={'brain-state '+(phase!=='idle'?'active':'')}><Activity size={16}/><div><strong>{phase==='idle'?'Idle':cognitive.label}</strong><small>{current?current.name+' Active':'No active region'}</small></div></div></div>
+   <div className="brain-heading"><div><h1>Brain Synapsis</h1><p>Live cognitive activity map</p></div><div className={'brain-state '+(phase!=='idle'?'active':'')}><Activity size={16}/><div><strong>{phase==='idle'?'Idle':live?.stage.replaceAll('_',' ')||cognitive.label}</strong><small>{current?current.name+' Active':'No active region'}</small></div></div></div>
    <BrainMap active={phase}/>
   </section>
   <aside className="brain-regions">

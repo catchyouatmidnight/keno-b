@@ -86,6 +86,7 @@ class ChatInput(StrictModel):
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()), min_length=8, max_length=100)
     stream: bool = False
     max_tokens: int = Field(default=512, ge=32, le=3072)
+    execution_mode: Literal["fast", "balanced", "deep"] = "balanced"
     attachment_ids: list[str] | None = Field(default=None, max_length=4)
     library_document_ids: list[str] = Field(default_factory=list, max_length=4)
 
@@ -188,6 +189,8 @@ async def lifespan(app):
         raise RuntimeError("CONTEXT_SIZE must be between 2048 and 32768")
     initialize()
     app.state.generation_lock = asyncio.Lock()
+    app.state.cognitive_subscribers = set()
+    app.state.cognitive_state = {"stage": "idle", "detail": "Waiting for activity", "intensity": 0.0, "at": now()}
     app.state.llm = httpx.AsyncClient(base_url=LLM_URL, timeout=httpx.Timeout(300, connect=5), trust_env=False)
     app.state.laya = httpx.AsyncClient(base_url=LAYA_URL, timeout=httpx.Timeout(20, connect=3), trust_env=False)
     app.state.lookup = httpx.AsyncClient(base_url=LOOKUP_URL, timeout=httpx.Timeout(20, connect=3), trust_env=False,
@@ -239,23 +242,50 @@ def health():
     return {"status": "ok", "version": VERSION}
 
 
+def system_runtime():
+    total = available = None
+    try:
+        values = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if ":" in line:
+                key, value = line.split(":", 1)
+                values[key] = int(value.strip().split()[0]) * 1024
+        total, available = values.get("MemTotal"), values.get("MemAvailable")
+    except (OSError, ValueError):
+        pass
+    quant = next((part for part in re.split(r"[-_.]", LLM_MODEL) if re.fullmatch(r"Q\d(?:_[A-Z0-9]+)?", part, re.I)), None)
+    return {"cpu_threads_available": os.cpu_count(), "ram_bytes": total, "ram_available_bytes": available,
+            "quantization": quant, "loaded_model": LLM_MODEL, "context_size": CONTEXT_SIZE}
+
+
+async def service_ready(client, path="/health", timeout=1.2):
+    try:
+        response = await client.get(path, timeout=timeout)
+        return response.status_code == 200, response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+    except (httpx.HTTPError, ValueError):
+        return False, {}
+
+
 @app.get("/api/v1/status", dependencies=[Depends(authenticate)])
 async def status():
-    ready = False
+    model_state, router_state, lookup_state = await asyncio.gather(
+        service_ready(app.state.llm, timeout=2.0),
+        service_ready(app.state.laya, timeout=1.2),
+        service_ready(app.state.lookup, timeout=1.2))
+    embedding_ready = False
     try:
-        response = await app.state.llm.get("/health", timeout=3)
-        ready = response.status_code == 200
+        async with httpx.AsyncClient(base_url="http://embedding:8080", timeout=httpx.Timeout(1.0, connect=.5), trust_env=False) as client:
+            embedding_ready = (await client.get("/health")).status_code == 200
     except httpx.HTTPError:
         pass
-    router_ready = False
-    try:
-        router_ready = (await app.state.laya.get("/health", timeout=3)).status_code == 200
-    except httpx.HTTPError:
-        pass
-    return {"backend": "ready", "model": LLM_MODEL, "model_ready": ready,
+    lookup_ready, lookup_detail = lookup_state
+    return {"backend": "ready", "model": LLM_MODEL, "model_ready": model_state[0],
             "generating": app.state.generation_lock.locked(), "context_size": CONTEXT_SIZE,
             "inference": "self-hosted", "memory_mode": "automatic" if setting("tools")["automatic_memory"] else "explicit", "version": VERSION,
-            "router": "laya", "router_ready": router_ready, "vision_enabled": VISION_ENABLED}
+            "router": "laya", "router_ready": router_state[0], "vision_enabled": VISION_ENABLED,
+            "lookup_ready": lookup_ready, "search_ready": bool(lookup_detail.get("search_ready", lookup_ready)),
+            "embedding_ready": embedding_ready, "runtime": system_runtime(),
+            "cognitive": app.state.cognitive_state}
 
 
 @app.get("/api/v1/openapi.json", dependencies=[Depends(authenticate)])
@@ -486,6 +516,37 @@ def continued_web_query(previous_query, message):
     return (base + " " + tail).strip()[:300]
 
 
+def execution_limits(value):
+    if value.execution_mode == "fast":
+        return {"history": 2, "thinking_budget": 0, "output": min(value.max_tokens, 384)}
+    if value.execution_mode == "deep":
+        return {"history": 6, "thinking_budget": THINKING_BUDGET, "output": value.max_tokens}
+    return {"history": 4, "thinking_budget": None, "output": min(value.max_tokens, 1024)}
+
+
+def apply_execution_mode(route, value):
+    route = dict(route)
+    if value.execution_mode == "fast":
+        route["thinking"] = False
+        route["effort_policy"] = "fast:" + str(route.get("effort_policy", "adaptive"))
+    elif value.execution_mode == "deep" and route.get("engine") != "deterministic" and route.get("tool_family") not in {"calculator", "live"}:
+        route["thinking"] = True
+        route["effort_policy"] = "deep:" + str(route.get("effort_policy", "adaptive"))
+    route["execution_mode"] = value.execution_mode
+    return route
+
+
+def deterministic_attachment_route(attachments, message, mode):
+    if not attachments:
+        return None
+    image = any(a.get("kind") == "image" for a in attachments)
+    overview = bool(re.search(r"\b(?:summari[sz]e|overview|whole|entire|full document|ringkas|rangkuman)\b", message, re.I))
+    return {"engine": "deterministic", "thinking": mode == "deep", "vision": image,
+            "document_scope": "overview" if overview else "focused", "question_count": 0, "call_count": 0,
+            "tool_family": "none", "tool_policy": "document_evidence_answer", "uncertain": False,
+            "decisions": {}, "effort_policy": "explicit_document", "seconds": 0.0}
+
+
 def system_prompt(selected, has_uploads=False, available_tools=None):
     identity = setting("identity")
     prompt=(f"You are {identity['name']}, the ASSISTANT. {identity['personality']}\n"
@@ -521,9 +582,12 @@ async def fit_context(value, route=None, attachments=None):
     images, visual_sources = documents.visual_inputs(attachments, value.message, route["vision"])
     if images and not VISION_ENABLED:
         raise HTTPException(422, "This request needs vision; install the matching projector first")
+    limits = execution_limits(value)
     thinking_tokens = THINKING_BUDGET if route["thinking"] else 0
     if route["thinking"] and route.get("uncertain"):
         thinking_tokens = UNCERTAIN_THINKING_BUDGET
+    if limits["thinking_budget"] is not None:
+        thinking_tokens = limits["thinking_budget"] if route["thinking"] or value.execution_mode == "deep" else 0
     image_reserve = len(images) * (IMAGE_TOKEN_LIMIT + 64)
     retrieval_query = value.message
     with db() as c:
@@ -537,6 +601,9 @@ async def fit_context(value, route=None, attachments=None):
     with db() as c:
         prior_requests=[r[0] for r in c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 4",(value.conversation_id,))]
         policy=context_policy.plan(value.message,prior_requests,bool(attachments))
+        policy["recent_limit"] = min(policy["recent_limit"], limits["history"])
+        if value.execution_mode == "deep" and policy["mode"] == "followup":
+            policy["recent_limit"] = min(6, max(policy["recent_limit"], 4))
         if route.get("tool_policy") == "explicit_web_search":
             policy={"mode": "web_search", "recent_limit": 0, "older": False}
         elif route.get("tool_policy") == "web_search_followup":
@@ -589,7 +656,7 @@ async def fit_context(value, route=None, attachments=None):
         tokenized = await app.state.llm.post("/tokenize", json={"content": formatted.json()["prompt"], "add_special": True})
         tokenized.raise_for_status()
         count = len(tokenized.json()["tokens"])
-        reserved_output = max(512 + thinking_tokens if definitions else 0, value.max_tokens + thinking_tokens)
+        reserved_output = max(512 + thinking_tokens if definitions else 0, limits["output"] + thinking_tokens)
         if count + image_reserve + reserved_output + 128 <= CONTEXT_SIZE:
             if images:
                 messages[-1]["content"] = [{"type": "text", "text": text}] + [{"type": "image_url", "image_url": {"url": image}} for image in images]
@@ -599,6 +666,7 @@ async def fit_context(value, route=None, attachments=None):
                               "document_answer_mode": "direct_stream" if direct_document else None,
                               "document_evidence_characters": sum(len(e["text"]) for e in excerpts),
                               "context_policy": policy["mode"], "reply_language": reply_language, "followup_context": followup, "history_summary": bool(older["compact_notes"]), "retrieved_history": len(older["relevant_older_excerpts"]),
+                              "execution_mode": value.execution_mode, "effective_max_tokens": limits["output"],
                               "attachment_ids": [a["id"] for a in attachments],
                               "document_sources": [{**{k: c[k] for k in ("attachment_id", "name", "page", "chunk")},
                                   **({"library_document_id": c["attachment_id"][4:]} if c["attachment_id"].startswith("lib:") else {})} for c in excerpts],
@@ -623,6 +691,39 @@ def result_for(row):
 
 def event(name, value):
     return f"event: {name}\ndata: {json.dumps(value, ensure_ascii=False)}\n\n"
+
+
+async def publish_cognitive(stage, detail="", intensity=0.6, request_id=None):
+    payload = {"stage": stage, "detail": detail, "intensity": max(0.0, min(1.0, float(intensity))),
+               "request_id": request_id, "at": now()}
+    app.state.cognitive_state = payload
+    stale = []
+    for queue in tuple(app.state.cognitive_subscribers):
+        try:
+            queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            stale.append(queue)
+    for queue in stale:
+        app.state.cognitive_subscribers.discard(queue)
+    return payload
+
+
+@app.get("/api/v1/cognitive", dependencies=[Depends(authenticate)])
+async def cognitive_stream(request: Request):
+    queue = asyncio.Queue(maxsize=32)
+    app.state.cognitive_subscribers.add(queue)
+    async def stream():
+        try:
+            yield event("cognitive", app.state.cognitive_state)
+            while not await request.is_disconnected():
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield event("cognitive", payload)
+                except asyncio.TimeoutError:
+                    yield event("keepalive", {"at": now()})
+        finally:
+            app.state.cognitive_subscribers.discard(queue)
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
 
 async def check_tool_budget(messages, metadata, definitions):
@@ -744,7 +845,8 @@ async def generate(value, messages, metadata, request_started=None, attachments=
     opening = response_style.ResponseFilter(value.message, enabled=not attachments)
     session = tools.ToolSession(value, attachments or [], setting("tools"), db, now, app.state.lookup, metadata.get("route", {}))
     try:
-        metadata["max_tokens"] = value.max_tokens
+        metadata["effective_max_tokens"] = metadata.get("effective_max_tokens", execution_limits(value)["output"])
+        metadata["max_tokens"] = metadata["effective_max_tokens"]
         definitions = [tools.SPECS[name] for name in metadata.get("available_tools", [])]
         # This read-only answer uses verified user evidence/server state. Do not
         # ask a model to plan tools before returning an already-known name.
@@ -797,7 +899,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                                 tool_planning_rounds=0, tool_planning_mode="direct_evidence")
             model_started = time.monotonic()
             web_answer = metadata.get("route", {}).get("tool_policy") in {"explicit_web_search", "web_search_followup"}
-            answer_tokens = min(value.max_tokens, 384) if web_answer else value.max_tokens
+            answer_tokens = min(metadata["effective_max_tokens"], 384) if web_answer else metadata["effective_max_tokens"]
             payload = {"model": LLM_MODEL, "messages": messages, "stream": True,
                        "temperature": 0.2 if web_answer else 0.6, "max_tokens": answer_tokens + metadata.get("thinking_budget", 0),
                        "chat_template_kwargs": {"enable_thinking": metadata.get("route", {}).get("thinking", False)},
@@ -812,6 +914,30 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                     if raw == "[DONE]":
                         break
                     data = json.loads(raw)
+                    timings = data.get("timings") if isinstance(data, dict) else None
+                    if isinstance(timings, dict):
+                        prompt_ms = timings.get("prompt_ms")
+                        predicted_ms = timings.get("predicted_ms")
+                        if isinstance(prompt_ms, (int, float)):
+                            metadata["prompt_eval_seconds"] = round(prompt_ms / 1000, 3)
+                        if isinstance(predicted_ms, (int, float)):
+                            metadata["generation_seconds"] = round(predicted_ms / 1000, 3)
+                        if isinstance(timings.get("prompt_per_second"), (int, float)):
+                            metadata["prompt_tokens_per_second"] = round(float(timings["prompt_per_second"]), 2)
+                        if isinstance(timings.get("predicted_per_second"), (int, float)):
+                            metadata["generation_tokens_per_second"] = round(float(timings["predicted_per_second"]), 2)
+                        if isinstance(timings.get("predicted_n"), int):
+                            metadata["generated_tokens"] = timings["predicted_n"]
+                        cached = timings.get("prompt_n_cached")
+                        prompt_n = timings.get("prompt_n")
+                        if isinstance(cached, int) and isinstance(prompt_n, int) and prompt_n > 0:
+                            metadata["cache_usage"] = round(cached / prompt_n, 3)
+                    usage = data.get("usage") if isinstance(data, dict) else None
+                    if isinstance(usage, dict):
+                        if isinstance(usage.get("completion_tokens"), int):
+                            metadata["generated_tokens"] = usage["completion_tokens"]
+                        if isinstance(usage.get("prompt_tokens"), int):
+                            metadata["server_prompt_tokens"] = usage["prompt_tokens"]
                     if "error" in data:
                         raise ValueError("Model returned an error")
                     for choice in data.get("choices", []):
@@ -845,6 +971,11 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                             yield "delta", {"text": delta}
                         if choice.get("finish_reason"):
                             finished, reason = True, choice["finish_reason"]
+            metadata["model_total_seconds"] = round(time.monotonic() - model_started, 3)
+            if "generation_seconds" not in metadata and first_content is not None:
+                metadata["generation_seconds"] = round(max(0.0, time.monotonic() - first_content), 3)
+            if "prompt_eval_seconds" not in metadata and first_content is not None:
+                metadata["prompt_eval_seconds"] = round(max(0.0, first_content - model_started), 3)
             if finished:
                 tail = opening.push('', final=True)
                 if tail:
@@ -916,8 +1047,8 @@ async def chat(value: ChatInput):
         previous_metadata = json.loads(prior[0]["metadata"]) if prior else {}
         previous_route = previous_metadata.get("route", {}) if isinstance(previous_metadata, dict) else {}
         calendar_result = calendar_tools.calculate(value.message,[str(t["user_text"]) for t in prior]) if not attachments else None
-        route = None
-        if not attachments:
+        route = deterministic_attachment_route(attachments, value.message, value.execution_mode)
+        if route is None and not attachments:
             search_query = tools.explicit_web_search(value.message)
             search_followup = tools.web_search_followup(value.message, previous_user)
             continued_search = None
@@ -935,21 +1066,20 @@ async def chat(value: ChatInput):
                 route = deterministic_route("web_search_followup", "live", search_followup)
             elif continued_search:
                 route = deterministic_route("web_search_followup", "live", continued_search)
+            elif calendar_result is not None:
+                route = deterministic_route("local_calendar")
+            elif tools.explicit_calculation(value.message):
+                route = deterministic_route("explicit_calculation", "calculator")
+            elif not tools.NO_SAVE.search(value.message) and not tools.FORGET_REQUEST.search(value.message) and (
+                    tools.FIRSTHAND_SAVE.search(value.message.strip()) or tools.FOLLOWUP_SAVE.fullmatch(value.message.strip())):
+                route = deterministic_route("explicit_memory_command", "memory")
+            elif tools.natural_memory(value.message, setting('tools')):
+                route = deterministic_route("natural_memory", "memory")
         if route is None:
             route = await routing.decide(app.state.laya, value.message, history, attachments)
-        # Explicit user actions outrank a probabilistic answer/action label.
-        # Preserve the raw Laya decision so disagreements stay observable.
-        if not attachments and not tools.NO_SAVE.search(value.message) and not tools.FORGET_REQUEST.search(value.message):
-            if tools.FIRSTHAND_SAVE.search(value.message.strip()) or tools.FOLLOWUP_SAVE.fullmatch(value.message.strip()):
-                route.update(tool_family="memory", tool_policy="explicit_memory_command", thinking=False, effort_policy="explicit_save_quick")
         if not attachments and re.fullmatch(r"(?:tell me more|expand on that|explain further)[.!?]*", value.message.strip(), re.I):
             route.update(tool_family='none', tool_policy='followup_expansion')
-        if not attachments and tools.natural_memory(value.message, setting('tools')):
-            route.update(tool_family="memory", tool_policy="natural_memory", thinking=False, effort_policy="natural_memory_quick")
-        if not attachments and tools.explicit_calculation(value.message):
-            route.update(tool_family="calculator", tool_policy="explicit_calculation", thinking=False, effort_policy="explicit_calculation_quick")
-        if calendar_result is not None:
-            route.update(tool_family="none",tool_policy="local_calendar",thinking=False,effort_policy="explicit_calculation_quick")
+        route = apply_execution_mode(route, value)
         messages, metadata = await fit_context(value, route, attachments)
         if calendar_result is not None:
             metadata["calendar_calculation"] = calendar_result
@@ -970,12 +1100,38 @@ async def chat(value: ChatInput):
         async def stream():
             generator = generate(value, messages, metadata, request_started, attachments)
             started = False
+            generation_announced = False
             try:
+                route_state = metadata.get("route", {})
+                payload = await publish_cognitive("route_started", "Routing and context prepared", .35, value.request_id)
+                yield event("cognitive", payload)
+                if route_state.get("vision"):
+                    payload = await publish_cognitive("vision", "Visual input processing", .8, value.request_id)
+                    yield event("cognitive", payload)
+                elif attachments or route_state.get("tool_family") == "documents":
+                    payload = await publish_cognitive("retrieval", "Document evidence retrieval", .72, value.request_id)
+                    yield event("cognitive", payload)
+                elif route_state.get("thinking"):
+                    payload = await publish_cognitive("reasoning", "Reasoning stage active", .7, value.request_id)
+                    yield event("cognitive", payload)
                 yield event("context", metadata)
                 started = True
                 async for name, data in generator:
+                    if name == "tool":
+                        tool_name = str(data.get("name", "tool"))
+                        stage = "memory_save" if tool_name == "memory_save" else "memory_search" if tool_name in {"memory_search", "memory_forget"} else "retrieval" if tool_name in {"document_search", "document_overview", "document_pages", "web_search"} else "tool"
+                        payload = await publish_cognitive(stage, tool_name.replace("_", " "), .85, value.request_id)
+                        yield event("cognitive", payload)
+                    elif name == "delta" and not generation_announced:
+                        generation_announced = True
+                        payload = await publish_cognitive("generation", "Generating response", .9, value.request_id)
+                        yield event("cognitive", payload)
                     yield event(name, data)
+                payload = await publish_cognitive("idle", "Response complete", 0.0, value.request_id)
+                yield event("cognitive", payload)
             except (httpx.HTTPError, ValueError, KeyError):
+                payload = await publish_cognitive("idle", "Request failed", 0.0, value.request_id)
+                yield event("cognitive", payload)
                 yield event("error", {"detail": "Local inference failed. Partial output was not saved. Retry using the same request_id."})
             finally:
                 await generator.aclose()

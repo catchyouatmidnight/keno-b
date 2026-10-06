@@ -11,5 +11,5 @@ export interface Case {id:string;created_at?:string;title:string;suite:string;in
 export interface Check {kind:string;passed:boolean|null;detail:string}
 export interface Result {review?:{quality:number;note:string}|null;id:string;batch_id:string;case_id:string;request_id:string|null;conversation_id:string|null;status:string;checks:Check[];browser_seconds:number|null;browser_first_token_seconds:number|null;error?:string|null;repetition:number;created_at:string;configuration:Record<string,unknown>|null;case:Case|null;run:Run|null}
 export interface LibraryStatus {ready:boolean;configured:boolean;detail:string|null;formats:string[];encryption:string;manual_unlock:boolean}
-export interface ChatRequest {conversation_id:string;message:string;request_id:string;stream:true;max_tokens:number;attachment_ids:string[];library_document_ids?:string[]}
+export interface ChatRequest {conversation_id:string;message:string;request_id:string;stream:true;max_tokens:number;execution_mode:'fast'|'balanced'|'deep';attachment_ids:string[];library_document_ids?:string[]}
 export interface ChatResult {request_id:string;conversation_id:string;reply:string;context:Context}

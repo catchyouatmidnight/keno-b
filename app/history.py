@@ -44,5 +44,8 @@ def context(connection, conversation_id, query, recent_limit=RECENT_TURNS, retri
     words = set(re.findall(r"\w+", query.casefold())) - QUERY_STOP_WORDS
     older = connection.execute("SELECT user_text,assistant_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 200 OFFSET ?", (conversation_id, RECENT_TURNS)).fetchall()
     scored = [(len(words & set(re.findall(r"\w+", r[0].casefold()))), r) for r in older]
-    matches = [{"user_excerpt": r[0][:300], "assistant_excerpt": (r[1] or "")[:500]} for score, r in sorted(scored, key=lambda item: item[0], reverse=True)[:2] if score >= 2]
-    return list(reversed(recent)), {"compact_notes": json.loads(row[0])[:4] if row and re.search(r"\b(?:earlier|previously|last time|before|sebelumnya|tadi)\b",query,re.I) else [], "relevant_older_excerpts": matches}
+    matches = [{"user_excerpt": r[0][:220], "assistant_excerpt": (r[1] or "")[:320]} for score, r in sorted(scored, key=lambda item: item[0], reverse=True)[:2] if score >= 2]
+    explicit_past = bool(re.search(r"\b(?:earlier|previously|last time|before|sebelumnya|tadi)\b",query,re.I))
+    followup = context_policy.is_followup(query)
+    compact = json.loads(row[0])[:4 if explicit_past else 2] if row and (explicit_past or (followup and len(older) >= 6)) else []
+    return list(reversed(recent)), {"compact_notes": compact, "relevant_older_excerpts": matches}
