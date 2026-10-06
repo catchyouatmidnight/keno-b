@@ -103,7 +103,10 @@ async def run():
           'VISION_ENABLED': False, 'THINKING_BUDGET': 384, 'UNCERTAIN_THINKING_BUDGET': 96,
           'IMAGE_TOKEN_LIMIT': 1024, 'CONTEXT_SIZE': 4096, 'LLM_MODEL': 'test', 'history': hist,
           'context_policy': NS(FOLLOWUP=re.compile('tell me more'), plan=lambda *args: {'mode': 'documents', 'recent_limit': 4, 'older': True}),
-          'select_memories': lambda *args: [], 'system_prompt': lambda *args: 'Use local evidence.',
+          'conversation_memory_enabled': lambda *args: True,
+          'execution_limits': lambda value: {'history': 4, 'thinking_budget': None, 'output': min(value.max_tokens, 2048), 'context': 4096},
+          'select_memories': lambda *args: [], 'memory_retrieval_metadata': lambda *args: [],
+          'system_prompt': lambda *args: 'Use local evidence.',
           'history_answer_for_prompt': lambda user, answer: answer,
           'response_style': NS(ResponseFilter=Filter), 'saved_field_reply': lambda *args: None,
           'user_name_reply': lambda *args: None, 'check_tool_budget': None}
@@ -112,7 +115,7 @@ async def run():
         yield None
     ns['agent'] = NS(plan=forbidden)
     main = functions('app/main.py', ['fit_context', 'generate'], ns)
-    value = NS(message='tell me more about secure onboarding', conversation_id='c', request_id='r', max_tokens=512)
+    value = NS(message='tell me more about secure onboarding', conversation_id='c', request_id='r', max_tokens=512, execution_mode='balanced')
     # Even a conflicting family label cannot override answer-only necessity.
     route['tool_family'] = 'multiple'
     messages, meta = await main.fit_context(value, route, [file])
