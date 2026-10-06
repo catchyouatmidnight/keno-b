@@ -192,7 +192,7 @@ def test_history_compaction_retrieval_backup_and_delete(client,tmp_path):
     assert any('Orchid' in r['user_excerpt'] for r in notes['relevant_older_excerpts'])
     backup=tmp_path/'backup.db';backup.write_bytes(client.get('/api/v1/backup').content)
     with sqlite3.connect(backup) as c:
-        assert c.execute('PRAGMA user_version').fetchone()[0]==4
+        assert c.execute('PRAGMA user_version').fetchone()[0]==5
         assert c.execute('SELECT COUNT(*) FROM conversation_summaries').fetchone()[0]==1
     client.delete('/api/v1/conversations/'+conversation)
     with main.db() as c:
@@ -237,7 +237,7 @@ def test_schema_two_upgrade_keeps_profile_memories_and_attachments(client,tmp_pa
     file=upload(client,conversation,'notes.txt',b'Existing document').json()
     with main.db() as c:
         # Simulate the actual v2 schema before validating the backup.
-        for table in ('response_feedback', 'conversation_preferences', 'memory_meta', 'conversation_summaries'):
+        for table in ('memory_history', 'response_feedback', 'conversation_preferences', 'memory_meta', 'conversation_summaries'):
             c.execute(f'DROP TABLE {table}')
         c.execute("DELETE FROM settings WHERE key='tools'")
         c.execute('PRAGMA user_version=2')
@@ -435,7 +435,7 @@ def test_memory_capability_reports_real_settings_and_identity_prompt(client):
     assert 'The USER is a different person' in prompt
     assert 'Use user evidence for identity; admit when unknown' in prompt
     assert 'only successful saves persist' in main.system_prompt([],available_tools=['memory_save'])
-    assert client.get('/api/v1/status').json()['version']=='0.4.0'
+    assert client.get('/api/v1/status').json()['version']=='0.5.0'
 
 
 def test_memory_quote_accepts_spacing_but_preserves_source_and_rejects_paraphrases(client):
@@ -712,7 +712,7 @@ def test_natural_location_correction_forget_and_disabled_memory(client):
     corrected=send(client, cid, request_id='natural-correct', message='Actually, I moved to Bandung.').json()
     assert len(client.get('/api/v1/memories').json()) == 1
     assert corrected['context']['memory_conflicts'] == [{'key':'user.location','resolution':'newer_user_evidence_supersedes_previous'}]
-    assert client.get('/api/v1/memory-history/user.location').json()[0]['content'] == 'I live in Bekasi.'
+    assert client.get('/api/v1/memory-history/user.location').json()[0]['content'] == 'I live in Bekasi'
     assert send(client, new_conversation(client), request_id='natural-updated', message='What is my city?').json()['reply'] == 'You live in Bandung.'
     forgotten=send(client, cid, request_id='natural-forget', message='Forget my city.').json()
     assert forgotten['reply'] == 'Forgot the saved location.'

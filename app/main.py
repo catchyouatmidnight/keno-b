@@ -201,7 +201,7 @@ def initialize():
           request_id TEXT PRIMARY KEY REFERENCES turns(request_id) ON DELETE CASCADE,
           value TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS memory_history (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          id INTEGER PRIMARY KEY,
           memory_key TEXT NOT NULL, content TEXT NOT NULL, category TEXT NOT NULL,
           pinned INTEGER NOT NULL, source_conversation_id TEXT, expires_at TEXT,
           importance REAL NOT NULL, confidence REAL NOT NULL, replaced_at TEXT NOT NULL,

@@ -470,7 +470,7 @@ def test_v1_backup_migrates_without_resetting_personal_state(client, tmp_path):
     conversation = new_conversation(client)
     with main.db() as db:
         # Simulate the actual v1 schema, not merely a downgraded user_version.
-        for table in ('response_feedback', 'conversation_preferences', 'memory_meta', 'conversation_summaries', 'attachments'):
+        for table in ('memory_history', 'response_feedback', 'conversation_preferences', 'memory_meta', 'conversation_summaries', 'attachments'):
             db.execute(f'DROP TABLE {table}')
         db.execute('PRAGMA user_version=1')
     legacy = tmp_path / 'legacy.sqlite3'
@@ -479,7 +479,7 @@ def test_v1_backup_migrates_without_resetting_personal_state(client, tmp_path):
     assert client.get('/api/v1/profile').json()['name'] == 'Zain'
     assert client.get('/api/v1/conversations/' + conversation).status_code == 200
     with main.db() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 4
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 5
         assert db.execute('SELECT count(*) FROM attachments').fetchone()[0] == 0
 
 

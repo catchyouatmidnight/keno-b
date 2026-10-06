@@ -31,6 +31,7 @@ def validate(path):
         if version not in {1, 2, 3, 4, 5}:
             raise ValueError("Unsupported backup schema version")
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        tables.discard("sqlite_sequence")  # SQLite internal table; never application data.
         expected = TABLES | ({"attachments"} if version >= 2 else set()) | ({"conversation_summaries"} if version >= 3 else set()) | (V4_TABLES if version >= 4 else set()) | (V5_TABLES if version >= 5 else set())
         if tables & (VAULT_TABLES | VAULT_VERSION_TABLES):
             expected |= VAULT_TABLES
