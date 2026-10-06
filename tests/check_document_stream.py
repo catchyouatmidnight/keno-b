@@ -102,7 +102,7 @@ async def run():
     ns = {'documents': docs, 'tools': tools, 'setting': lambda *args: {}, 'app': app, 'db': lambda: connection,
           'now': lambda: 'now', 'json': json, 're': re, 'time': time, 'HTTPException': HTTPException,
           'VISION_ENABLED': False, 'THINKING_BUDGET': 384, 'UNCERTAIN_THINKING_BUDGET': 96,
-          'IMAGE_TOKEN_LIMIT': 1024, 'CONTEXT_SIZE': 4096, 'LLM_MODEL': 'test', 'history': hist,
+          'IMAGE_TOKEN_LIMIT': 1024, 'CONTEXT_SIZE': 4096, 'LLM_MODEL': 'test', 'active_runtime_model': lambda: 'test', 'history': hist,
           'context_policy': NS(FOLLOWUP=re.compile('tell me more'), is_followup=lambda text: bool(re.search(r'tell me more', text, re.I)),
                                plan=lambda *args: {'mode': 'documents', 'recent_limit': 4, 'older': True}),
           'conversation_memory_enabled': lambda *args: True,
