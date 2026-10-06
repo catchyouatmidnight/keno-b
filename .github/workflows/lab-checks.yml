@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npm test
       - run: npm run build
       - run: npx playwright install --with-deps chromium
@@ -27,3 +27,16 @@ jobs:
             web/artifacts
             web/package-lock.json
             web/dist
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -q
+      - run: python tests/check_lab_storage.py
+      - run: python tests/check_document_stream.py
+      - run: python tests/check_context_policy.py
+      - run: node --test tests/test_console.js
