@@ -4,7 +4,7 @@ export interface Source {attachment_id?:string;library_document_id?:string;docum
 export interface Context {route?:Route;document_sources?:Source[];visual_sources?:Source[];web_sources?:Source[];tool_calls?:Array<{name:string;status:string;detail?:string}>;[key:string]:unknown}
 export interface Run {request_id:string;conversation_id:string;user_text:string;assistant_text:string|null;status:string;created_at:string;context:Context;metadata?:string;session_title?:string}
 export interface Session {id:string;title:string;created_at:string;turns?:Run[]}
-export interface Doc {id:string;name:string;format:string;category:string;topic:string;version:number;passages:number;embedding_model:string|null;warnings:string[];classification:string;source_bytes?:number|null;section_count?:number|null;indexing_seconds?:number|null;imported_at?:string|null}
+export interface Doc {id:string;name:string;format:string;category:string;topic:string;version:number;passages:number;embedding_model:string|null;warnings:string[];classification:string;collection?:string;tags?:string[];metadata?:Record<string,string>;source_bytes?:number|null;section_count?:number|null;indexing_seconds?:number|null;imported_at?:string|null}
 export interface Runtime {backend:string;model:string;model_ready:boolean;router:string;router_ready:boolean;generating:boolean;context_size:number;version:string;vision_enabled:boolean;[key:string]:unknown}
 export interface Assertion {kind:string;value:string}
 export interface Case {id:string;created_at?:string;title:string;suite:string;input:string;setup:string[];attachment_ids:string[];conversation_id?:string|null;library_document_ids?:string[];expected:string;assertions:Assertion[];timeout:number;tags:string[];intent:'fresh'|'repeat'|'followup'}

@@ -107,3 +107,29 @@ def test_xml_entity_and_macro_rejection():
     stream=io.BytesIO()
     with zipfile.ZipFile(stream,'w') as z:z.writestr('word/vbaProject.bin','macro')
     with pytest.raises(Exception):library_extract.extract('bad.docx',stream.getvalue())
+
+
+
+def test_collections_tags_hybrid_fallback_and_reindex(documents_client,monkeypatch):
+    c=documents_client
+    first=upload(c,'Atlas deadline is April 2027.','atlas.txt',collection='Projects',tags=['atlas','deadline']).json()
+    second=upload(c,'Cooking notes for soup.','food.txt',collection='Personal',tags=['food']).json()
+    listing=c.get('/api/v1/library/documents').json()
+    atlas=next(d for d in listing if d['id']==first['id'])
+    assert atlas['collection']=='Projects' and atlas['tags']==['atlas','deadline']
+    collections=c.get('/api/v1/library/collections').json()['collections']
+    assert {item['name'] for item in collections}=={'Projects','Personal'}
+
+    result=c.post('/api/v1/library/search',json={'question':'Atlas deadline','collections':['Projects'],'mode':'hybrid'}).json()
+    assert result['mode']=='keyword_fallback'
+    assert result['excerpts'][0]['document_id']==first['id']
+    assert all(e['collection']=='Projects' for e in result['excerpts'])
+    assert 'rerank_score' in result['excerpts'][0]
+
+    async def vectors(texts,kind):return [[1.0]+[0.0]*383 for _ in texts]
+    monkeypatch.setattr(library,'embed',vectors)
+    reindexed=c.post(f"/api/v1/library/documents/{first['id']}/reindex")
+    assert reindexed.status_code==200,reindexed.text
+    body=reindexed.json()
+    assert body['version']==2 and body['embedding_model']==library.MODEL
+    assert body['collection']=='Projects' and body['tags']==['atlas','deadline']

@@ -16,7 +16,8 @@ def test_explicit_save_overrides_answer_only_route(client):
     response = send(client, new_conversation(client), message='Remember that my name is Zain.').json()
     assert response['context']['answer_source'] == 'memory_guard'
     assert response['context']['route']['tool_policy'] == 'explicit_memory_command'
-    assert response['context']['route']['decisions']['tool_need']['choice'] == 'answer'
+    assert response['context']['route']['engine'] == 'deterministic'
+    assert response['context']['route']['call_count'] == 0
     assert client.get('/api/v1/memories').json()[0]['key'] == 'user.name'
     assert not any(path == '/v1/chat/completions' for path, _ in calls)
 
@@ -407,7 +408,7 @@ def test_document_answer_necessity_prevents_multiple_planner(client):
     assert context['document_answer_mode'] == 'direct_stream'
     assert context['tool_planning_rounds'] == 0 and context['tool_model_seconds'] == 0
     assert context['history_turns'] == 0 and context['citation_check']['status'] == 'present'
-    assert len(routing_calls) == 1 and 'tool_family' not in routing_calls[0]['questions']
+    assert routing_calls == []
     inference = [p for path, p in calls if path == '/v1/chat/completions']
     assert len(inference) == 1 and inference[0]['stream'] is True
 
@@ -426,8 +427,9 @@ def test_vision_is_local_bounded_and_selected_by_laya(client, monkeypatch):
     assert response.status_code == 200
     context = response.json()['context']
     assert context['visual_sources'][0]['page'] == 2
-    assert context['route']['question_count'] == 4
-    assert set(context['route']['decisions']) == {'thinking', 'source', 'document_scope', 'tool_need'}
+    assert context['route']['engine'] == 'deterministic'
+    assert context['route']['call_count'] == 0
+    assert context['route']['decisions'] == {}
     payload = [p for path, p in calls if path == '/v1/chat/completions'][-1]
     parts = payload['messages'][-1]['content']
     assert parts[1]['image_url']['url'].startswith('data:image/jpeg;base64,')
@@ -588,3 +590,54 @@ def test_pdf_page_selection_coverage_and_citation_diagnostics(client):
     turn = client.get(f'/api/v1/conversations/{cid}').json()['turns'][-1]
     assert turn['status'] == 'failed' and not turn['assistant_text']
     assert send(client, cid, request_id='page-outofrange', message='Read page 9', attachment_ids=[receipt['id']]).status_code == 422
+
+
+
+def test_conversation_memory_optout_branch_feedback_and_memory_metadata(client):
+    main.app.state.llm = fake_model()
+    cid = new_conversation(client)
+    assert client.get(f'/api/v1/conversations/{cid}/memory').json() == {'enabled': True}
+    assert client.put(f'/api/v1/conversations/{cid}/memory', json={'enabled': False}).json() == {'enabled': False}
+    calls=[]
+    main.app.state.llm = fake_model(calls=calls)
+    disabled = send(client, cid, request_id='memory-optout-001', message='Remember that my name is Zain.').json()
+    assert disabled['context']['answer_source'] == 'memory_disabled_guard'
+    assert client.get('/api/v1/memories').json() == []
+    assert not any(path == '/v1/chat/completions' for path,_ in calls)
+
+    client.put(f'/api/v1/conversations/{cid}/memory', json={'enabled': True})
+    first = send(client, cid, request_id='branch-source-001', message='Hello').json()
+    second = send(client, cid, request_id='branch-source-002', message='Continue').json()
+    branch = client.post(f'/api/v1/conversations/{cid}/branch',
+                         json={'request_id': second['request_id'], 'include_target': False}).json()
+    copied = client.get('/api/v1/conversations/'+branch['id']).json()['turns']
+    assert len(copied) == 1 and copied[0]['user_text'] == first['context'].get('original_user_text','Hello')
+
+    feedback = client.put('/api/v1/runs/branch-source-002/feedback', json={'value':'up','note':'useful'}).json()
+    assert feedback['value'] == 'up'
+    assert client.put('/api/v1/runs/branch-source-002/feedback', json={'value':'clear','note':''}).json()['value'] is None
+
+    memory = client.put('/api/v1/memories/project',
+                        json={'key':'project','content':'Keno-B','category':'project','importance':.9,'confidence':.95}).json()
+    assert memory['importance'] == .9 and memory['confidence'] == .95
+    listed = client.get('/api/v1/memories').json()[0]
+    assert listed['retrieval_count'] >= 0 and 'last_reason' in listed
+
+
+def test_execution_modes_bound_work_and_emit_cognitive_events(client):
+    calls=[]
+    main.app.state.llm = fake_model(calls=calls)
+    main.app.state.laya = fake_router(thinking='deep')
+    fast = send(client, new_conversation(client), request_id='mode-fast-001',
+                message='Compare these approaches', execution_mode='fast', max_tokens=2048).json()
+    assert fast['context']['execution_mode'] == 'fast'
+    assert fast['context']['effective_max_tokens'] == 384
+    assert fast['context']['route']['thinking'] is False
+    assert fast['context']['route']['execution_mode'] == 'fast'
+
+    main.app.state.laya = fake_router(thinking='quick')
+    deep = send(client, new_conversation(client), request_id='mode-deep-001',
+                message='Compare these approaches carefully', execution_mode='deep', max_tokens=512).json()
+    assert deep['context']['execution_mode'] == 'deep'
+    assert deep['context']['route']['thinking'] is True
+    assert deep['context']['thinking_budget'] == 384

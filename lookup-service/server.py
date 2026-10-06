@@ -1,5 +1,6 @@
 """Optional egress service. Only explicit city/search inputs leave the server."""
 import asyncio
+import hashlib
 import html
 import ipaddress
 import json
@@ -11,7 +12,8 @@ import socket
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -29,6 +31,12 @@ class City(BaseModel):
 class Search(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: str = Field(min_length=1, max_length=300)
+
+
+class ModelDownload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(min_length=12, max_length=2000)
+    filename: str | None = Field(default=None, max_length=200)
 
 
 def authenticate(authorization: str = Header(default="")):
@@ -278,3 +286,49 @@ async def search(value: Search):
     }
     cache_put(app.state.search_cache, key, response, 64)
     return response
+
+
+def trusted_model_url(url):
+    parsed=urlparse(url)
+    host=(parsed.hostname or '').casefold()
+    return parsed.scheme=='https' and (host=='huggingface.co' or host.endswith('.huggingface.co') or host=='hf.co' or host.endswith('.hf.co'))
+
+
+@app.post("/model-download", dependencies=[Depends(authenticate)])
+async def model_download(value: ModelDownload):
+    if not trusted_model_url(value.url):
+        raise HTTPException(422, "Only HTTPS Hugging Face model URLs are allowed")
+    name=Path(value.filename or urlparse(value.url).path.rsplit('/',1)[-1]).name
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,198}\.gguf",name,re.I):
+        raise HTTPException(422, "Model filename must be a safe .gguf basename")
+    root=Path("/managed-models");root.mkdir(parents=True,exist_ok=True)
+    target=root/name;part=root/(name+".part")
+    current=value.url
+    digest=hashlib.sha256();size=0
+    try:
+        for _ in range(6):
+            async with app.state.http.stream("GET",current,timeout=httpx.Timeout(3600,connect=10)) as response:
+                if response.status_code in {301,302,303,307,308}:
+                    location=response.headers.get("location")
+                    if not location:raise HTTPException(502,"Model host returned an invalid redirect")
+                    current=urljoin(current,location)
+                    if not trusted_model_url(current):raise HTTPException(422,"Model redirect left the trusted Hugging Face hosts")
+                    continue
+                response.raise_for_status()
+                announced=response.headers.get("content-length")
+                if announced and int(announced)>12*1024**3:raise HTTPException(413,"Model exceeds the 12 GB download limit")
+                with part.open("wb") as handle:
+                    async for chunk in response.aiter_bytes(1024*1024):
+                        size+=len(chunk)
+                        if size>12*1024**3:raise HTTPException(413,"Model exceeds the 12 GB download limit")
+                        digest.update(chunk);handle.write(chunk)
+                if size<1024*1024:raise HTTPException(422,"Downloaded file is too small to be a model")
+                part.replace(target)
+                return {"name":name,"bytes":size,"sha256":digest.hexdigest(),"installed":True}
+        raise HTTPException(502,"Too many model download redirects")
+    except (httpx.HTTPError,ValueError) as error:
+        part.unlink(missing_ok=True)
+        if isinstance(error,HTTPException):raise
+        raise HTTPException(502,"Model download failed")
+    finally:
+        if part.exists() and not target.exists():part.unlink(missing_ok=True)

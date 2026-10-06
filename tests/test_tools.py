@@ -3,8 +3,9 @@ import json
 import sqlite3
 
 import httpx
+import pytest
 
-from app import main, documents, history
+from app import main, documents, history, tools
 from test_backend import client, fake_model, fake_router, new_conversation, send, simple_pdf, upload
 
 
@@ -166,11 +167,13 @@ def test_document_overview_covers_last_page_and_source_preview(client):
     page=client.get(f"/api/v1/attachments/{file['id']}/pages/11")
     assert page.status_code==200 and page.headers['content-type']=='image/jpeg'
     assert client.get(f"/api/v1/attachments/{file['id']}/pages/12").status_code==422
-    # Genuine mixed operations retain the native planner and its file isolation.
-    main.app.state.laya=fake_router(family='multiple')
-    main.app.state.llm=native_model([[('document_read',{'attachment_id':'foreign-file','pages':[1]})]])
-    failed=send(client,conversation,request_id='foreign-doc-001',attachment_ids=[file['id']]).json()
-    assert failed['context']['tool_calls'][0]['status']=='failed'
+    # Tool execution still rejects foreign attachment IDs even when clear document requests skip Laya.
+    value=main.ChatInput(conversation_id=conversation,message='Read this file',request_id='foreign-doc-001')
+    session=tools.ToolSession(value,[{**file,'sections':[],'kind':'pdf','pages':11}],{'automatic_memory':True,'weather_enabled':False,'search_enabled':False},main.db,main.now,main.app.state.lookup)
+    async def foreign():
+        with pytest.raises(tools.ToolValidationError):
+            await session.execute('document_read',{'attachment_id':'foreign-file','pages':[1]})
+    asyncio.run(foreign())
     assert documents.overview([{'id':'image','name':'scan','kind':'image','pages':1,'sections':[]}])['complete_extracted_text'] is False
 
 
@@ -611,7 +614,10 @@ def test_action_gate_keeps_calculator_available(client):
     assert response['context']['tool_calls'][0]['status'] == 'complete'
     main.app.state.laya = fake_router(family='invalid', tool_need='action')
     invalid = send(client, new_conversation(client), request_id='invalid-family-stage', message='Calculate 2+2')
-    assert invalid.status_code == 503
+    assert invalid.status_code == 200
+    assert invalid.json()['reply'] == '2+2 = 4.'
+    assert invalid.json()['context']['route']['engine'] == 'deterministic'
+    assert invalid.json()['context']['route']['call_count'] == 0
     assert not main.app.state.generation_lock.locked()
 
 

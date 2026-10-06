@@ -63,8 +63,10 @@ class Identity(StrictModel):
 class MemoryInput(StrictModel):
     key: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_.-]+$")
     content: str = Field(min_length=1, max_length=1000)
-    category: Literal["fact", "preference", "project", "temporary"] = "fact"
+    category: Literal["profile", "fact", "preference", "project", "temporary"] = "fact"
     pinned: bool = False
+    importance: float = Field(default=0.5, ge=0, le=1)
+    confidence: float = Field(default=0.8, ge=0, le=1)
     source_conversation_id: str | None = Field(default=None, max_length=36)
     expires_at: datetime | None = None
 
@@ -78,6 +80,34 @@ class MemoryInput(StrictModel):
 
 class ConversationInput(StrictModel):
     title: str = Field(default="New conversation", min_length=1, max_length=120)
+
+
+class ConversationMemoryInput(StrictModel):
+    enabled: bool = True
+
+
+class BranchInput(StrictModel):
+    request_id: str = Field(min_length=8, max_length=100)
+    include_target: bool = False
+
+
+class FeedbackInput(StrictModel):
+    value: Literal["up", "down", "clear"]
+    note: str = Field(default="", max_length=500)
+
+
+class MemoryMergeInput(StrictModel):
+    keys: list[str] = Field(min_length=2, max_length=5)
+    target_key: str | None = Field(default=None, max_length=100)
+
+
+class RuntimeModelInput(StrictModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class ModelDownloadInput(StrictModel):
+    url: str = Field(min_length=12, max_length=2000)
+    filename: str | None = Field(default=None, max_length=200)
 
 
 class ChatInput(StrictModel):
@@ -159,6 +189,16 @@ def initialize():
         CREATE TABLE IF NOT EXISTS conversation_summaries (
           conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
           notes TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS memory_meta (
+          key TEXT PRIMARY KEY REFERENCES memories(key) ON DELETE CASCADE,
+          importance REAL NOT NULL DEFAULT 0.5,
+          confidence REAL NOT NULL DEFAULT 0.8);
+        CREATE TABLE IF NOT EXISTS conversation_preferences (
+          conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+          memory_enabled INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS response_feedback (
+          request_id TEXT PRIMARY KEY REFERENCES turns(request_id) ON DELETE CASCADE,
+          value TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
         PRAGMA user_version=3;
         ''')
         for key, value in (("profile", Profile().model_dump()), ("identity", Identity().model_dump()), ("tools", ToolSettings().model_dump())):
@@ -188,6 +228,12 @@ async def lifespan(app):
     if not 2048 <= CONTEXT_SIZE <= 32768:
         raise RuntimeError("CONTEXT_SIZE must be between 2048 and 32768")
     initialize()
+    global LLM_MODEL
+    selection = DB_PATH.parent / "model-selection.txt"
+    if selection.exists():
+        staged = selection.read_text().strip()
+        if re.fullmatch(r"[A-Za-z0-9._-]{1,200}\.gguf", staged) and any((root / staged).is_file() for root in (Path("/models"), Path("/managed-models"))):
+            LLM_MODEL = staged
     app.state.generation_lock = asyncio.Lock()
     app.state.cognitive_subscribers = set()
     app.state.cognitive_state = {"stage": "idle", "detail": "Waiting for activity", "intensity": 0.0, "at": now()}
@@ -351,8 +397,26 @@ def put_identity(value: Identity):
 @app.get("/api/v1/memories", dependencies=[Depends(authenticate)])
 def memories(q: str = Query(default="", max_length=200), limit: int = Query(default=100, ge=1, le=500)):
     with db() as c:
-        rows = c.execute("SELECT * FROM memories WHERE (expires_at IS NULL OR expires_at>?) AND instr(casefold(key || ' ' || content), ?) > 0 ORDER BY pinned DESC, updated_at DESC LIMIT ?", (now(), q.casefold(), limit)).fetchall()
-    return [dict(r) for r in rows]
+        rows = c.execute("""SELECT m.*, COALESCE(mm.importance,0.5) importance, COALESCE(mm.confidence,0.8) confidence
+                            FROM memories m LEFT JOIN memory_meta mm ON mm.key=m.key
+                            WHERE (m.expires_at IS NULL OR m.expires_at>?) AND instr(casefold(m.key || ' ' || m.content), ?) > 0
+                            ORDER BY m.pinned DESC, COALESCE(mm.importance,0.5) DESC, m.updated_at DESC LIMIT ?""",
+                         (now(), q.casefold(), limit)).fetchall()
+        recent = c.execute("SELECT metadata FROM turns WHERE status='complete' ORDER BY rowid DESC LIMIT 200").fetchall()
+    usage = {}
+    for item in recent:
+        try:
+            metadata = json.loads(item[0] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for hit in metadata.get("memory_retrieval", []) if isinstance(metadata, dict) else []:
+            if not isinstance(hit, dict) or not hit.get("key"):
+                continue
+            state = usage.setdefault(hit["key"], {"retrieval_count": 0, "last_reason": ""})
+            state["retrieval_count"] += 1
+            if not state["last_reason"]:
+                state["last_reason"] = str(hit.get("reason", ""))[:200]
+    return [{**dict(r), **usage.get(r["key"], {"retrieval_count": 0, "last_reason": ""})} for r in rows]
 
 
 @app.put("/api/v1/memories/{key}", dependencies=[Depends(authenticate)])
@@ -366,7 +430,67 @@ async def upsert_memory(key: str, value: MemoryInput):
         c.execute("INSERT INTO memories VALUES (?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET content=excluded.content, category=excluded.category, pinned=excluded.pinned, source_conversation_id=excluded.source_conversation_id, expires_at=excluded.expires_at, updated_at=excluded.updated_at",
                   (key, value.content, value.category, int(value.pinned), value.source_conversation_id,
                    value.expires_at.isoformat() if value.expires_at else None, now()))
-        return dict(c.execute("SELECT * FROM memories WHERE key=?", (key,)).fetchone())
+        c.execute("INSERT INTO memory_meta(key,importance,confidence) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET importance=excluded.importance,confidence=excluded.confidence",
+                  (key, value.importance, value.confidence))
+        row = dict(c.execute("""SELECT m.*, COALESCE(mm.importance,0.5) importance, COALESCE(mm.confidence,0.8) confidence
+                              FROM memories m LEFT JOIN memory_meta mm ON mm.key=m.key WHERE m.key=?""", (key,)).fetchone())
+        return row
+
+
+@app.get("/api/v1/memories/duplicates", dependencies=[Depends(authenticate)])
+def memory_duplicates():
+    items = memories(q="", limit=500)
+    pairs = []
+    def tokens(item):
+        return set(re.findall(r"\w+", (item["key"] + " " + item["content"]).casefold())) - documents.QUERY_STOP_WORDS
+    for index, left in enumerate(items):
+        a = tokens(left)
+        if not a: continue
+        for right in items[index+1:]:
+            b = tokens(right)
+            if not b: continue
+            score = len(a & b) / max(1, len(a | b))
+            if score >= .55:
+                pairs.append({"keys": [left["key"], right["key"]], "similarity": round(score, 3),
+                              "preview": [left["content"][:120], right["content"][:120]]})
+    return sorted(pairs, key=lambda pair: pair["similarity"], reverse=True)[:50]
+
+
+@app.post("/api/v1/memories/merge", dependencies=[Depends(authenticate)])
+def merge_memories(value: MemoryMergeInput):
+    if app.state.generation_lock.locked():
+        raise HTTPException(409, "Wait for the active response before merging memories")
+    keys = list(dict.fromkeys(value.keys))
+    if len(keys) < 2:
+        raise HTTPException(422, "Choose at least two different memories")
+    target = value.target_key or keys[0]
+    if target not in keys:
+        raise HTTPException(422, "target_key must be one of keys")
+    with db() as c:
+        placeholders = ",".join("?" for _ in keys)
+        rows = c.execute(f"""SELECT m.*,COALESCE(mm.importance,.5) importance,COALESCE(mm.confidence,.8) confidence
+                            FROM memories m LEFT JOIN memory_meta mm ON mm.key=m.key WHERE m.key IN ({placeholders})""", keys).fetchall()
+        if len(rows) != len(keys):
+            raise HTTPException(404, "One or more memories were not found")
+        by_key = {row["key"]: row for row in rows};base = by_key[target]
+        contents = []
+        for key in keys:
+            value_text = by_key[key]["content"].strip()
+            if value_text and not any(value_text.casefold() in existing.casefold() for existing in contents):
+                contents.append(value_text)
+        combined = "; ".join(contents)[:1000]
+        priority = {"profile": 5, "preference": 4, "project": 3, "fact": 2, "temporary": 1}
+        category = max(rows, key=lambda row: priority.get(row["category"], 0))["category"]
+        pinned = int(any(row["pinned"] for row in rows))
+        importance = max(float(row["importance"]) for row in rows)
+        confidence = max(float(row["confidence"]) for row in rows)
+        c.execute("UPDATE memories SET content=?,category=?,pinned=?,updated_at=? WHERE key=?",
+                  (combined, category, pinned, now(), target))
+        c.execute("INSERT INTO memory_meta(key,importance,confidence) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET importance=excluded.importance,confidence=excluded.confidence",
+                  (target, importance, confidence))
+        for key in keys:
+            if key != target: c.execute("DELETE FROM memories WHERE key=?", (key,))
+    return {"merged_into": target, "removed": [key for key in keys if key != target], "content": combined}
 
 
 @app.delete("/api/v1/memories/{key}", dependencies=[Depends(authenticate)])
@@ -384,6 +508,65 @@ def create_conversation(value: ConversationInput):
     with db() as c:
         c.execute("INSERT INTO conversations VALUES (:id,:title,:created_at)", row)
     return row
+
+
+def conversation_memory_enabled(conversation_id):
+    with db() as c:
+        row = c.execute("SELECT memory_enabled FROM conversation_preferences WHERE conversation_id=?", (conversation_id,)).fetchone()
+    return bool(row[0]) if row else True
+
+
+@app.get("/api/v1/conversations/{conversation_id}/memory", dependencies=[Depends(authenticate)])
+def conversation_memory(conversation_id: str):
+    with db() as c:
+        if not c.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone():
+            raise HTTPException(404, "Conversation not found")
+    return {"enabled": conversation_memory_enabled(conversation_id)}
+
+
+@app.put("/api/v1/conversations/{conversation_id}/memory", dependencies=[Depends(authenticate)])
+def set_conversation_memory(conversation_id: str, value: ConversationMemoryInput):
+    with db() as c:
+        if not c.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone():
+            raise HTTPException(404, "Conversation not found")
+        c.execute("INSERT INTO conversation_preferences(conversation_id,memory_enabled) VALUES (?,?) ON CONFLICT(conversation_id) DO UPDATE SET memory_enabled=excluded.memory_enabled",
+                  (conversation_id, int(value.enabled)))
+    return {"enabled": value.enabled}
+
+
+@app.post("/api/v1/conversations/{conversation_id}/branch", dependencies=[Depends(authenticate)])
+def branch_conversation(conversation_id: str, value: BranchInput):
+    with db() as c:
+        source = c.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+        if not source:
+            raise HTTPException(404, "Conversation not found")
+        target = c.execute("SELECT rowid,* FROM turns WHERE conversation_id=? AND request_id=? AND status='complete'", (conversation_id, value.request_id)).fetchone()
+        if not target:
+            raise HTTPException(404, "Branch point not found")
+        new_id = str(uuid.uuid4())
+        title = ("Branch · " + source["title"])[:120]
+        c.execute("INSERT INTO conversations VALUES (?,?,?)", (new_id, title, now()))
+        rows = c.execute("SELECT rowid,* FROM turns WHERE conversation_id=? AND status='complete' AND rowid<=? ORDER BY rowid",
+                         (conversation_id, target["rowid"])).fetchall()
+        if not value.include_target:
+            rows = [r for r in rows if r["request_id"] != value.request_id]
+        for row in rows:
+            c.execute("INSERT INTO turns(request_id,conversation_id,user_text,assistant_text,status,created_at,metadata) VALUES (?,?,?,?,?,?,?)",
+                      (str(uuid.uuid4()), new_id, row["user_text"], row["assistant_text"], "complete", row["created_at"], row["metadata"]))
+    return {"id": new_id, "title": title, "created_at": now(), "branch_from": value.request_id, "copied_turns": len(rows)}
+
+
+@app.put("/api/v1/runs/{request_id}/feedback", dependencies=[Depends(authenticate)])
+def save_feedback(request_id: str, value: FeedbackInput):
+    with db() as c:
+        if not c.execute("SELECT 1 FROM turns WHERE request_id=?", (request_id,)).fetchone():
+            raise HTTPException(404, "Run not found")
+        if value.value == "clear":
+            c.execute("DELETE FROM response_feedback WHERE request_id=?", (request_id,))
+            return {"request_id": request_id, "value": None}
+        c.execute("INSERT INTO response_feedback(request_id,value,note,updated_at) VALUES (?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET value=excluded.value,note=excluded.note,updated_at=excluded.updated_at",
+                  (request_id, value.value, value.note, now()))
+    return {"request_id": request_id, "value": value.value, "note": value.note}
 
 
 @app.get("/api/v1/conversations", dependencies=[Depends(authenticate)])
@@ -466,12 +649,23 @@ def select_memories(message):
     if re.search(r"\b(?:creator|who made you|who created you|who built you)\b", message, re.I):
         words.update({"creator", "created", "name"})
     candidates = memories(q="", limit=500)
-    def score(m):
+    def lexical(m):
         return len(words & set(re.findall(r"\w+", (m["key"] + " " + m["content"]).casefold())))
+    def score(m):
+        return lexical(m) * (0.5 + float(m.get("confidence", 0.8))) + float(m.get("importance", 0.5))
     ranked = sorted(candidates, key=lambda m: (bool(m["pinned"]), score(m)), reverse=True)
-    # Names are pinned for durable identity, not to decorate every answer.
-    # Keep always-applicable pinned preferences, but retrieve names by relevance.
-    return [m for m in ranked if (m["pinned"] and (m["category"] == "preference" or re.search(r"(?:^|[._-])(?:language|style|tone)(?:$|[._-])",m["key"],re.I))) or score(m) > 0][:8]
+    return [m for m in ranked if (m["pinned"] and (m["category"] in {"profile", "preference"} or re.search(r"(?:^|[._-])(?:language|style|tone)(?:$|[._-])",m["key"],re.I))) or lexical(m) > 0][:8]
+
+
+def memory_retrieval_metadata(message, selected):
+    words = set(re.findall(r"\w+", message.casefold())) - documents.QUERY_STOP_WORDS
+    result = []
+    for memory in selected:
+        overlap = sorted(words & set(re.findall(r"\w+", (memory["key"] + " " + memory["content"]).casefold())))
+        reason = "pinned profile/preference" if memory.get("pinned") and not overlap else "matched: " + ", ".join(overlap[:6]) if overlap else "high-priority memory"
+        result.append({"key": memory["key"], "reason": reason, "importance": memory.get("importance", 0.5),
+                       "confidence": memory.get("confidence", 0.8)})
+    return result
 
 
 def history_answer_for_prompt(user_text, answer):
@@ -539,9 +733,15 @@ def apply_execution_mode(route, value):
 def deterministic_attachment_route(attachments, message, mode):
     if not attachments:
         return None
+    text = message.strip()
+    explicit = bool(re.search(r"\b(?:summari[sz]e|overview|read|analy[sz]e|explain|inspect|document|file|pdf|page|image|photo|screenshot|attached|attachment|tell me|what|find|extract|compare|review|translate)\b", text, re.I))
+    if not explicit:
+        return None
     image = any(a.get("kind") == "image" for a in attachments)
-    overview = bool(re.search(r"\b(?:summari[sz]e|overview|whole|entire|full document|ringkas|rangkuman)\b", message, re.I))
-    return {"engine": "deterministic", "thinking": mode == "deep", "vision": image,
+    textless_pdf = any(a.get("kind") == "pdf" and not any(str(section.get("text", "")).strip() for section in a.get("sections", [])) for a in attachments)
+    vision = image or textless_pdf
+    overview = bool(re.search(r"\b(?:summari[sz]e|overview|whole|entire|full document|ringkas|rangkuman)\b", text, re.I))
+    return {"engine": "deterministic", "thinking": mode == "deep", "vision": vision,
             "document_scope": "overview" if overview else "focused", "question_count": 0, "call_count": 0,
             "tool_family": "none", "tool_policy": "document_evidence_answer", "uncertain": False,
             "decisions": {}, "effort_policy": "explicit_document", "seconds": 0.0}
@@ -568,7 +768,12 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
 async def fit_context(value, route=None, attachments=None):
     route = dict(route or {"thinking": False, "vision": False})
     attachments = attachments or []
+    memory_enabled = conversation_memory_enabled(value.conversation_id)
     definitions = tools.catalog(route.get("tool_family", "none"), setting("tools"), value.message, attachments)
+    if not memory_enabled:
+        definitions = [d for d in definitions if not d["function"]["name"].startswith("memory_")]
+        if route.get("tool_family") == "memory":
+            route.update(tool_family="none", tool_policy="memory_disabled")
     if route.get("tool_policy") in {"explicit_web_search", "web_search_followup"}:
         definitions = [d for d in definitions if d["function"]["name"] == "web_search"]
     elif route.get("tool_policy") == "web_search_needs_query":
@@ -611,7 +816,8 @@ async def fit_context(value, route=None, attachments=None):
         if direct_document:
             policy={"mode": "document_evidence", "recent_limit": 1 if followup else 0, "older": False}
         reply_language=history.reply_language(c,value.conversation_id,value.message)
-    selected = select_memories(retrieval_query)
+    selected = select_memories(retrieval_query) if memory_enabled else []
+    memory_retrieval = memory_retrieval_metadata(retrieval_query, selected)
     profile = setting("profile")
     relevant_profile = {k: v for k, v in profile.items() if v and (k == "preferences" or (k == "name" and re.search(r"\b(?:name|creator|made you)\b", retrieval_query, re.I)) or (k == "background" and re.search(r"\b(?:my|me|career|work|background)\b", retrieval_query, re.I)))}
     with db() as c:
@@ -667,6 +873,7 @@ async def fit_context(value, route=None, attachments=None):
                               "document_evidence_characters": sum(len(e["text"]) for e in excerpts),
                               "context_policy": policy["mode"], "reply_language": reply_language, "followup_context": followup, "history_summary": bool(older["compact_notes"]), "retrieved_history": len(older["relevant_older_excerpts"]),
                               "execution_mode": value.execution_mode, "effective_max_tokens": limits["output"],
+                              "memory_enabled": memory_enabled, "memory_retrieval": memory_retrieval,
                               "attachment_ids": [a["id"] for a in attachments],
                               "document_sources": [{**{k: c[k] for k in ("attachment_id", "name", "page", "chunk")},
                                   **({"library_document_id": c["attachment_id"][4:]} if c["attachment_id"].startswith("lib:") else {})} for c in excerpts],
@@ -865,8 +1072,9 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                 yield name, data
         planner_reply = metadata.pop("_planner_reply", None)
         calculation_guarded = metadata.pop("_calculation_reply", None)
+        memory_disabled_guarded = "Memory is disabled for this conversation. Enable Memory for this chat before saving or retrieving persistent memories." if metadata.get("route", {}).get("tool_policy") == "memory_disabled" else None
         search_guarded = tools.web_search_reply(session, metadata)
-        guarded = calendar_guarded or calculation_guarded or search_guarded or tools.weather_reply(session, metadata)
+        guarded = calendar_guarded or calculation_guarded or memory_disabled_guarded or search_guarded or tools.weather_reply(session, metadata)
         memory_guarded = tools.memory_reply(session, metadata) if guarded is None else None
         if memory_guarded is not None: guarded = memory_guarded
         if guarded is not None: name_guarded = None
@@ -877,6 +1085,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                                         "saved_field_guard" if field_guarded is not None and name_guarded is not None else
                                         "user_name_guard" if name_guarded is not None else
                                         "calculator_tool" if calculation_guarded is not None else
+                                        "memory_disabled_guard" if memory_disabled_guarded is not None else
                                         "web_search_guard" if search_guarded is not None else
                                         "memory_guard" if memory_guarded is not None else
                                         "weather_tool" if session.weather_results else "weather_guard")
@@ -1148,6 +1357,62 @@ async def chat(value: ChatInput):
                     return data
     except (httpx.HTTPError, ValueError, KeyError):
         raise HTTPException(502, "Local inference failed. Retry using the same request_id.")
+
+
+def runtime_model_roots():
+    return [Path("/models"), Path("/managed-models")]
+
+
+@app.get("/api/v1/runtime/models", dependencies=[Depends(authenticate)])
+def runtime_models():
+    files = []
+    seen = set()
+    for root in runtime_model_roots():
+        if not root.exists():
+            continue
+        for path in sorted(root.glob("*.gguf")):
+            if "mmproj" in path.name.casefold() or path.name in seen:
+                continue
+            seen.add(path.name)
+            match = re.search(r"(Q\d(?:_[A-Z0-9]+)*)", path.name, re.I)
+            files.append({"name": path.name, "bytes": path.stat().st_size, "quantization": match.group(1) if match else None,
+                          "loaded": path.name == LLM_MODEL, "managed": root.name == "managed-models"})
+    selection = DB_PATH.parent / "model-selection.txt"
+    pending = selection.read_text().strip() if selection.exists() else None
+    runtime = system_runtime()
+    ram = runtime.get("ram_bytes") or 0
+    recommendation = {"threads": max(1, min(os.cpu_count() or 1, 6)),
+                      "context_size": 4096 if ram and ram < 8 * 1024**3 else 8192,
+                      "quantization": "Q4_K_M", "reason": "Balanced CPU/RAM default; benchmark before increasing context."}
+    return {"installed": files, "loaded": LLM_MODEL, "pending": pending, "recommendation": recommendation,
+            "activation": "Select a model here, then recreate llm and backend. No .env edit is required."}
+
+
+@app.put("/api/v1/runtime/model", dependencies=[Depends(authenticate)])
+def select_runtime_model(value: RuntimeModelInput):
+    name = Path(value.name).name
+    if name != value.name or not name.endswith(".gguf") or "mmproj" in name.casefold():
+        raise HTTPException(422, "Select an installed GGUF model file")
+    target = next((root / name for root in runtime_model_roots() if (root / name).is_file()), None)
+    if target is None:
+        raise HTTPException(404, "Model file is not installed")
+    path = DB_PATH.parent / "model-selection.txt"
+    path.write_text(name + "\n")
+    os.chmod(path, 0o600)
+    return {"pending": name, "loaded": LLM_MODEL, "restart_required": name != LLM_MODEL,
+            "command": "docker compose up -d --force-recreate llm backend"}
+
+
+@app.post("/api/v1/runtime/models/download", dependencies=[Depends(authenticate)])
+async def download_runtime_model(value: ModelDownloadInput):
+    if app.state.generation_lock.locked():
+        raise HTTPException(409, "Wait for the active response before downloading a model")
+    try:
+        response = await app.state.lookup.post("/model-download", json=value.model_dump(), timeout=3600)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        raise HTTPException(503, "Model download service unavailable. Start the live lookup service and retry.")
 
 
 @app.get("/api/v1/backup", dependencies=[Depends(authenticate)])

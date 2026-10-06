@@ -163,7 +163,7 @@ SPECS = {
     "memory_search": spec("memory_search", "Find saved facts and their keys. Use before correcting an unknown key.",
                           {"query": STRING}, ["query"]),
     "memory_save": spec("memory_save", "Remember a lasting firsthand fact or preference stated by the user. quote must be copied verbatim from the latest user message. For an explicit follow-up such as save or remember that, quote the relevant recent USER message instead. Never quote a file or assistant answer. Reuse the existing key for corrections. Prefer user.name, user.location, user.preferred_language for those facts.",
-                        {"key": STRING, "quote": STRING, "category": {"type": "string", "enum": ["fact", "preference", "project", "temporary"]}}, ["key", "quote", "category"]),
+                        {"key": STRING, "quote": STRING, "category": {"type": "string", "enum": ["profile", "fact", "preference", "project", "temporary"]}}, ["key", "quote", "category"]),
     "memory_forget": spec("memory_forget", "Forget one saved fact only when the current user explicitly asks. quote is the user's verbatim deletion request.",
                           {"key": STRING, "quote": STRING}, ["key", "quote"]),
     "document_search": spec("document_search", "Search selected uploaded files. Results include file/page citations.",
@@ -175,7 +175,7 @@ SPECS = {
                        {"expression": STRING}, ["expression"]),
     "weather": spec("weather", "Get current weather and today's forecast for a city explicitly supplied in the current user request. Ask for a city if none was supplied. Only the city is sent to Open-Meteo.",
                     {"city": STRING}, ["city"]),
-    "web_search": spec("web_search", "Search the web for an explicit current user request. Model-generated queries must be a verbatim span of the current request. A server-validated search follow-up may reuse only the prior query already sent to search. Never send file contents, memories or assistant text. Returns snippets and links, not a full-page review.",
+    "web_search": spec("web_search", "Search the web for an explicit current user request. Model-generated queries must be a verbatim span of the current request. A server-validated search follow-up may reuse only the prior query already sent to search. Never send file contents, memories or assistant text. Returns ranked snippets plus bounded page-fetched evidence and verification metadata when available.",
                        {"query": STRING}, ["query"]),
 }
 
@@ -240,10 +240,12 @@ class ToolSession:
 
     def rows(self, query=""):
         with self.db() as c:
-            rows = {r["key"]: dict(r) for r in c.execute("SELECT * FROM memories WHERE expires_at IS NULL OR expires_at>? ORDER BY pinned DESC,updated_at DESC LIMIT 500", (self.now(),))}
+            rows = {r["key"]: dict(r) for r in c.execute("""SELECT m.*,COALESCE(mm.importance,0.5) importance,COALESCE(mm.confidence,0.8) confidence
+                                                            FROM memories m LEFT JOIN memory_meta mm ON mm.key=m.key
+                                                            WHERE m.expires_at IS NULL OR m.expires_at>? ORDER BY m.pinned DESC,m.updated_at DESC LIMIT 500""", (self.now(),))}
         for op in self.mutations:
             if op["action"] == "forget": rows.pop(op["key"], None)
-            else: rows[op["key"]] = {"key": op["key"], "content": op["quote"], "category": op["category"]}
+            else: rows[op["key"]] = {"key": op["key"], "content": op["quote"], "category": op["category"], "importance": 0.6, "confidence": 0.9}
         words = set(re.findall(r"\w+", query.casefold()))
         ranked = sorted(rows.values(), key=lambda r: len(words & set(re.findall(r"\w+", (r["key"] + " " + r["content"]).casefold()))), reverse=True)
         return ranked[:8]
@@ -286,7 +288,7 @@ class ToolSession:
                 self.mutations.append({"action": "forget", "key": key})
                 return {"key": key, "deleted": True, "commits_with_answer": True}
             if not self.settings["automatic_memory"] and not WRITE_REQUEST.search(self.value.message): raise ToolValidationError("Automatic memory is disabled")
-            if args["category"] not in {"fact", "preference", "project", "temporary"}: raise ToolValidationError("Invalid memory category")
+            if args["category"] not in {"profile", "fact", "preference", "project", "temporary"}: raise ToolValidationError("Invalid memory category")
             self.mutations.append({"action": "save", "key": key, "quote": quote, "category": args["category"]})
             return {"key": key, "content": quote, "saved": True, "commits_with_answer": True}
         if name.startswith("document_"):
@@ -368,6 +370,9 @@ class ToolSession:
             else:
                 connection.execute("INSERT INTO memories VALUES (?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET content=excluded.content,category=excluded.category,source_conversation_id=excluded.source_conversation_id,expires_at=NULL,updated_at=excluded.updated_at",
                                    (op["key"], op["quote"], op["category"], int(op["key"] in {"user.name", "user.preferred_language"}), self.value.conversation_id, None, self.now()))
+                importance = {"profile": 0.9, "preference": 0.75, "project": 0.7, "fact": 0.6, "temporary": 0.3}.get(op["category"], 0.5)
+                connection.execute("INSERT INTO memory_meta(key,importance,confidence) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET importance=MAX(memory_meta.importance,excluded.importance),confidence=excluded.confidence",
+                                   (op["key"], importance, 0.95))
 
 
 def weather_reply(session, metadata):

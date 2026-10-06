@@ -36,6 +36,8 @@ services:
       VISION_ENABLED: ${VISION_ENABLED:-true}
     volumes:
       - ./data:/data
+      - ./models:/models:ro
+      - managed_models:/managed-models:ro
     networks: [private]
     depends_on:
       llm:
@@ -54,11 +56,8 @@ services:
     environment:
       VISION_ENABLED: ${VISION_ENABLED:-true}
       MMPROJ_FILE: ${MMPROJ_FILE:-Qwen3.5-2B-mmproj-F16.gguf}
+      MODEL_FILE: ${MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
     command:
-      - --model
-      - /models/${MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
-      - --alias
-      - ${MODEL_FILE:-Qwen3.5-2B-Q4_K_M.gguf}
       - --host
       - 0.0.0.0
       - --port
@@ -88,6 +87,8 @@ services:
       - ${LLM_LOG_VERBOSITY:-1}
     volumes:
       - ./models:/models:ro
+      - managed_models:/managed-models:ro
+      - ./data:/runtime:ro
       - ./scripts/llm-entrypoint.sh:/config/llm-entrypoint.sh:ro
     networks: [private]
     mem_limit: ${LLM_MEMORY_LIMIT:-6g}
@@ -130,6 +131,8 @@ services:
     environment:
       KENO_API_KEY: ${KENO_API_KEY:?Run bash scripts/setup.sh first}
       SEARCH_URL: http://search:8080/search
+    volumes:
+      - managed_models:/managed-models
     networks: [private, edge]
     mem_limit: 192m
     read_only: true
@@ -152,6 +155,7 @@ services:
     security_opt: [no-new-privileges:true]
 volumes:
   search_cache:
+  managed_models:
 networks:
   edge:
     driver: bridge
