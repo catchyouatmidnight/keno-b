@@ -38,7 +38,10 @@ def test_ciphertext_restart_backup_and_original(documents_client):
     assert c.get('/api/v1/library/documents').status_code==503
     os.environ['KENO_DOCUMENT_KEY']=DOCUMENT_KEY
     assert c.get('/api/v1/library/documents').json()[0]['name']=='private-orchid.txt'
-    assert c.post('/api/v1/library/search',json={'question':'orchid budget','mode':'keyword'}).json()['excerpts'][0]['source_id']=='S1'
+    search=c.post('/api/v1/library/search',json={'question':'orchid budget','mode':'keyword'}).json()
+    assert search['excerpts'][0]['source_id']=='S1'
+    assert search['retrieval']['seconds'] >= 0 and search['retrieval']['candidate_count'] >= 1
+    assert search['retrieval']['confidence_kind'].endswith('not a probability')
     assert c.get(f'/api/v1/library/documents/{doc}/download').content==original
     assert c.post('/api/v1/library/unlock',json={'password':'anything'}).status_code==404
 
@@ -133,6 +136,8 @@ def test_collections_tags_hybrid_fallback_and_reindex(documents_client,monkeypat
 
     result=c.post('/api/v1/library/search',json={'question':'Atlas deadline','folders':['Projects/Keno'],'mode':'hybrid'}).json()
     assert result['mode']=='keyword_fallback'
+    assert result['retrieval']['returned']==len(result['excerpts'])
+    assert 0 <= result['retrieval']['match_strength'] <= 1
     assert result['excerpts'][0]['document_id']==first['id']
     assert all(e['collection']=='Projects' and e['folder'].startswith('Projects/Keno') for e in result['excerpts'])
     assert 'rerank_score' in result['excerpts'][0]

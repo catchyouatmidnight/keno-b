@@ -5,7 +5,7 @@ import math
 import re
 from decimal import Decimal, localcontext
 
-from . import documents
+from . import documents, memory_state
 
 MAX_CALLS = 4
 MAX_ROUNDS = 2
@@ -260,6 +260,7 @@ class ToolSession:
         self.search_results = []
         self.web_verification = None
         self.research_evidence = []
+        self.memory_conflicts = []
 
     def rows(self, query=""):
         with self.db() as c:
@@ -325,8 +326,13 @@ class ToolSession:
                 return {"key": key, "deleted": True, "commits_with_answer": True}
             if not self.settings["automatic_memory"] and not WRITE_REQUEST.search(self.value.message): raise ToolValidationError("Automatic memory is disabled")
             if args["category"] not in {"profile", "fact", "preference", "project", "temporary"}: raise ToolValidationError("Invalid memory category")
+            with self.db() as c:
+                previous = c.execute("SELECT content FROM memories WHERE key=?", (key,)).fetchone()
+            supersedes = bool(previous and " ".join(previous[0].casefold().split()) != " ".join(quote.casefold().split()))
+            if supersedes:
+                self.memory_conflicts.append({"key": key, "resolution": "newer_user_evidence_supersedes_previous"})
             self.mutations.append({"action": "save", "key": key, "quote": quote, "category": args["category"]})
-            return {"key": key, "content": quote, "saved": True, "commits_with_answer": True}
+            return {"key": key, "content": quote, "saved": True, "supersedes_previous": supersedes, "commits_with_answer": True}
         if name.startswith("document_"):
             if not self.attachments: raise ToolValidationError("No files selected")
             if name == "document_search":
@@ -429,10 +435,14 @@ class ToolSession:
     def commit(self, connection):
         for op in self.mutations:
             if op["action"] == "forget":
+                memory_state.clear_history(connection, op["key"])
                 connection.execute("DELETE FROM memories WHERE key=?", (op["key"],))
             else:
+                stamp = self.now()
+                memory_state.archive_if_changed(connection, op["key"], op["quote"], stamp,
+                                                request_id=self.value.request_id, reason="superseded")
                 connection.execute("INSERT INTO memories VALUES (?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET content=excluded.content,category=excluded.category,source_conversation_id=excluded.source_conversation_id,expires_at=NULL,updated_at=excluded.updated_at",
-                                   (op["key"], op["quote"], op["category"], int(op["key"] in {"user.name", "user.preferred_language"}), self.value.conversation_id, None, self.now()))
+                                   (op["key"], op["quote"], op["category"], int(op["key"] in {"user.name", "user.preferred_language"}), self.value.conversation_id, None, stamp))
                 importance = {"profile": 0.9, "preference": 0.75, "project": 0.7, "fact": 0.6, "temporary": 0.3}.get(op["category"], 0.5)
                 connection.execute("INSERT INTO memory_meta(key,importance,confidence) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET importance=MAX(memory_meta.importance,excluded.importance),confidence=excluded.confidence",
                                    (op["key"], importance, 0.95))

@@ -23,9 +23,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from . import documents, routing, tools, history, agent, response_style, context_policy, calendar_tools
+from . import documents, routing, tools, history, agent, response_style, context_policy, calendar_tools, memory_state
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 DB_PATH = Path(os.environ.get("KENO_DB", "data/keno.db"))
 API_KEY = os.environ.get("KENO_API_KEY", "")
 LLM_URL = os.environ.get("LLM_URL", "http://llm:8080").rstrip("/")
@@ -166,7 +166,7 @@ def initialize():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with db() as c:
         version = c.execute("PRAGMA user_version").fetchone()[0]
-        if version > 4:
+        if version > 5:
             raise RuntimeError("Database is newer than this backend; refusing downgrade")
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript('''
@@ -200,7 +200,14 @@ def initialize():
         CREATE TABLE IF NOT EXISTS response_feedback (
           request_id TEXT PRIMARY KEY REFERENCES turns(request_id) ON DELETE CASCADE,
           value TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
-        PRAGMA user_version=4;
+        CREATE TABLE IF NOT EXISTS memory_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          memory_key TEXT NOT NULL, content TEXT NOT NULL, category TEXT NOT NULL,
+          pinned INTEGER NOT NULL, source_conversation_id TEXT, expires_at TEXT,
+          importance REAL NOT NULL, confidence REAL NOT NULL, replaced_at TEXT NOT NULL,
+          replacement_request_id TEXT, reason TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS memory_history_key ON memory_history(memory_key,id DESC);
+        PRAGMA user_version=5;
         ''')
         for key, value in (("profile", Profile().model_dump()), ("identity", Identity().model_dump()), ("tools", ToolSettings().model_dump())):
             c.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", (key, json.dumps(value)))
@@ -440,7 +447,8 @@ def put_identity(value: Identity):
 @app.get("/api/v1/memories", dependencies=[Depends(authenticate)])
 def memories(q: str = Query(default="", max_length=200), limit: int = Query(default=100, ge=1, le=500)):
     with db() as c:
-        rows = c.execute("""SELECT m.*, COALESCE(mm.importance,0.5) importance, COALESCE(mm.confidence,0.8) confidence
+        rows = c.execute("""SELECT m.*, COALESCE(mm.importance,0.5) importance, COALESCE(mm.confidence,0.8) confidence,
+                                   (SELECT count(*) FROM memory_history mh WHERE mh.memory_key=m.key) history_count
                             FROM memories m LEFT JOIN memory_meta mm ON mm.key=m.key
                             WHERE (m.expires_at IS NULL OR m.expires_at>?) AND instr(casefold(m.key || ' ' || m.content), ?) > 0
                             ORDER BY m.pinned DESC, COALESCE(mm.importance,0.5) DESC, m.updated_at DESC LIMIT ?""",
@@ -470,14 +478,23 @@ async def upsert_memory(key: str, value: MemoryInput):
     with db() as c:
         if value.source_conversation_id and not c.execute("SELECT 1 FROM conversations WHERE id=?", (value.source_conversation_id,)).fetchone():
             raise HTTPException(404, "Source conversation not found")
+        stamp = now()
+        archived = memory_state.archive_if_changed(c, key, value.content, stamp, reason="manual_edit")
         c.execute("INSERT INTO memories VALUES (?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET content=excluded.content, category=excluded.category, pinned=excluded.pinned, source_conversation_id=excluded.source_conversation_id, expires_at=excluded.expires_at, updated_at=excluded.updated_at",
                   (key, value.content, value.category, int(value.pinned), value.source_conversation_id,
-                   value.expires_at.isoformat() if value.expires_at else None, now()))
+                   value.expires_at.isoformat() if value.expires_at else None, stamp))
         c.execute("INSERT INTO memory_meta(key,importance,confidence) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET importance=excluded.importance,confidence=excluded.confidence",
                   (key, value.importance, value.confidence))
-        row = dict(c.execute("""SELECT m.*, COALESCE(mm.importance,0.5) importance, COALESCE(mm.confidence,0.8) confidence
+        row = dict(c.execute("""SELECT m.*, COALESCE(mm.importance,0.5) importance, COALESCE(mm.confidence,0.8) confidence,
+                                     (SELECT count(*) FROM memory_history mh WHERE mh.memory_key=m.key) history_count
                               FROM memories m LEFT JOIN memory_meta mm ON mm.key=m.key WHERE m.key=?""", (key,)).fetchone())
-        return row
+        return {**row, "superseded_previous": archived is not None}
+
+
+@app.get("/api/v1/memory-history/{key}", dependencies=[Depends(authenticate)])
+def memory_history(key: str, limit: int = Query(default=50, ge=1, le=200)):
+    with db() as c:
+        return memory_state.history(c, key, limit)
 
 
 @app.get("/api/v1/memories/duplicates", dependencies=[Depends(authenticate)])
@@ -542,6 +559,7 @@ async def delete_memory(key: str):
     with db() as c:
         if not c.execute("DELETE FROM memories WHERE key=?", (key,)).rowcount:
             raise HTTPException(404, "Memory not found")
+        memory_state.clear_history(c, key)
     return {"deleted": key}
 
 
@@ -854,9 +872,11 @@ async def fit_context(value, route=None, attachments=None):
     followup = context_policy.is_followup(value.message)
     if followup and previous:
         retrieval_query += " " + previous[0][:300]
+    retrieval_started = time.monotonic()
     excerpts = documents.answer_excerpts(attachments, retrieval_query,
         broad=route.get("document_scope") == "overview") if direct_document else documents.retrieve(
             attachments, retrieval_query, overview=route.get("document_scope") == "overview")
+    context_retrieval_seconds = round(time.monotonic() - retrieval_started, 3)
     with db() as c:
         prior_requests=[r[0] for r in c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 4",(value.conversation_id,))]
         policy=context_policy.plan(value.message,prior_requests,bool(attachments))
@@ -921,6 +941,9 @@ async def fit_context(value, route=None, attachments=None):
             if images:
                 messages[-1]["content"] = [{"type": "text", "text": text}] + [{"type": "image_url", "image_url": {"url": image}} for image in images]
             return messages, {"memory_keys": [m["key"] for m in selected], "history_turns": len(recent), "prompt_tokens": count,
+                              "prompt_utilization": round(count / max(1, limits["context"]), 4),
+                              "context_utilization": round((count + image_reserve + reserved_output + 128) / max(1, limits["context"]), 4),
+                              "context_retrieval_seconds": context_retrieval_seconds,
                               "image_token_reserve": image_reserve, "route": route, "thinking_budget": thinking_tokens,
                               "available_tools": [d["function"]["name"] for d in definitions],
                               "document_answer_mode": "direct_stream" if direct_document else None,

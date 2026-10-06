@@ -117,7 +117,9 @@ def test_memory_correction_expiry_and_cross_chat(client):
     seen = []
     main.app.state.llm = fake_model(seen=seen)
     client.put("/api/v1/memories/language", json={"key": "language", "content": "English", "pinned": True})
-    client.put("/api/v1/memories/language", json={"key": "language", "content": "Indonesian", "pinned": True})
+    correction = client.put("/api/v1/memories/language", json={"key": "language", "content": "Indonesian", "pinned": True}).json()
+    assert correction["superseded_previous"] is True and correction["history_count"] == 1
+    assert client.get("/api/v1/memory-history/language").json()[0]["content"] == "English"
     client.put("/api/v1/memories/old", json={"key": "old", "content": "Expired", "pinned": True, "expires_at": "2000-01-01T00:00:00Z"})
     assert len(client.get("/api/v1/memories").json()) == 1
     for index in range(2):
@@ -637,6 +639,8 @@ def test_execution_modes_bound_work_and_emit_cognitive_events(client):
     assert fast['context']['effective_max_tokens'] == 384
     assert fast['context']['route']['thinking'] is False
     assert fast['context']['route']['execution_mode'] == 'fast'
+    assert 0 <= fast['context']['prompt_utilization'] <= fast['context']['context_utilization'] <= 1
+    assert fast['context']['context_retrieval_seconds'] >= 0
 
     main.app.state.laya = fake_router(thinking='quick')
     deep = send(client, new_conversation(client), request_id='mode-deep-001',

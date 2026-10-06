@@ -36,7 +36,9 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     metadata['tool_planning_mode'] = 'natural_memory' if natural else 'explicit_name_save' if name_save else 'explicit_field_save' if direct_save else 'explicit_calculation' if direct_calculation else 'explicit_web_search_and_save' if direct_web and metadata.get('route', {}).get('tool_policy') == 'explicit_web_search_and_save' else 'explicit_web_search' if direct_web else 'model'
     mode = metadata.get("execution_mode", metadata.get("route", {}).get("execution_mode", "balanced"))
     round_limit = 1 if mode == "fast" else 4 if mode == "deep" else tools.MAX_ROUNDS
+    call_limit = 3 if mode == "fast" else 6 if mode == "deep" else tools.MAX_CALLS
     metadata["agent_step_limit"] = round_limit
+    metadata["agent_call_limit"] = call_limit
     planner_thinking = bool(metadata.get('route', {}).get('thinking', False)) and not required_save and not direct_web
     required_result_save = bool(direct_web and metadata.get('route', {}).get('tool_policy') == 'explicit_web_search_and_save' and 'memory_save_result' in allowed)
     metadata['tool_result_save_required'] = required_result_save
@@ -106,7 +108,7 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
             messages.append({'role': 'tool', 'tool_call_id': call_id, 'content': json.dumps(result, ensure_ascii=False)})
             inspect_count = min(3 if result.get('verification', {}).get('conflict') else 2, len(result.get('results', [])))
             for source_index in range(1, inspect_count + 1):
-                if count >= tools.MAX_CALLS - (1 if required_result_save else 0):
+                if count >= call_limit - (1 if required_result_save else 0):
                     break
                 count += 1
                 inspect_event = {'name': 'web_inspect', 'status': 'running', 'index': count, 'source_index': source_index}
@@ -171,11 +173,11 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                     raise ValueError("Model output exceeded limit")
                 metadata["_planner_reply"] = content
             break
-        if choice.get("finish_reason") == "length" or len(calls) > tools.MAX_CALLS - count:
+        if choice.get("finish_reason") == "length" or len(calls) > call_limit - count:
             raise ValueError("Tool call exceeded its generation or execution limit")
         normalized, results, may_continue = [], [], False
         for call in calls:
-            if count >= tools.MAX_CALLS: raise ValueError("Tool call limit reached")
+            if count >= call_limit: raise ValueError("Tool call limit reached")
             count += 1
             function = call.get("function", {})
             name = function.get("name", "")
@@ -213,7 +215,7 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
             results.append({"role": "tool", "tool_call_id": call_id, "content": json.dumps(result, ensure_ascii=False)})
         messages.append({"role": "assistant", "content": "", "tool_calls": normalized})
         messages.extend(results)
-        if not may_continue or count >= tools.MAX_CALLS:
+        if not may_continue or count >= call_limit:
             break
     metadata["tool_seconds"] = round(time.monotonic() - started, 3)
     metadata["tool_model_seconds"] = round(planning_seconds, 3)
@@ -224,6 +226,7 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     metadata["agent_steps"] = list(session.events)
     metadata["tool_calls"] = session.events
     metadata["memory_changes"] = [{"action": m["action"], "key": m["key"]} for m in session.mutations]
+    metadata["memory_conflicts"] = list(session.memory_conflicts)
     metadata["web_sources"] = session.web_sources
     metadata["web_verification"] = session.web_verification
     if session.sources:

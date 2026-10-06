@@ -38,6 +38,7 @@ def test_quick_planner_answer_uses_one_inference_and_preserves_replay(client):
     assert first['context']['answer_source'] == 'tool_planner'
     assert '_planner_reply' not in first['context']
     assert first['context']['tool_planning_rounds'] == 1
+    assert first['context']['agent_call_limit'] == 4
     assert first['context']['tool_execution_seconds'] == 0
     assert sum(path == '/v1/chat/completions' for path, _ in requests) == 1
     assert send(client, conversation, message='Explain my saved preferences.').json()['reply'] == first['reply']
@@ -708,12 +709,15 @@ def test_natural_location_correction_forget_and_disabled_memory(client):
     send(client, cid, message='I live in Bekasi.')
     result=send(client, new_conversation(client), request_id='natural-recall', message='Where do I live?').json()
     assert result['reply'] == 'You live in Bekasi.'
-    send(client, cid, request_id='natural-correct', message='Actually, I moved to Bandung.')
+    corrected=send(client, cid, request_id='natural-correct', message='Actually, I moved to Bandung.').json()
     assert len(client.get('/api/v1/memories').json()) == 1
+    assert corrected['context']['memory_conflicts'] == [{'key':'user.location','resolution':'newer_user_evidence_supersedes_previous'}]
+    assert client.get('/api/v1/memory-history/user.location').json()[0]['content'] == 'I live in Bekasi.'
     assert send(client, new_conversation(client), request_id='natural-updated', message='What is my city?').json()['reply'] == 'You live in Bandung.'
     forgotten=send(client, cid, request_id='natural-forget', message='Forget my city.').json()
     assert forgotten['reply'] == 'Forgot the saved location.'
     assert client.get('/api/v1/memories').json() == []
+    assert client.get('/api/v1/memory-history/user.location').json() == []
     assert 'location saved' in send(client, new_conversation(client), request_id='natural-unknown', message='Where do I live?').json()['reply']
     assert not any(path == '/v1/chat/completions' for path,_ in requests)
     client.put('/api/v1/tools/settings', json={'automatic_memory':False})

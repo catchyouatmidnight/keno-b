@@ -8,6 +8,7 @@ import {display,seconds} from './metrics.mjs';
 import type {Doc,Source} from './types';
 
 interface FolderItem {path:string;documents:number;depth:number}
+interface RetrievalStats {seconds:number;candidate_count:number;ranked_count:number;returned:number;match_strength:number;confidence:number;confidence_kind:string;top_rerank_score?:number|null;top_cosine_similarity?:number|null;top_keyword_matches?:number}
 
 export default function Documents(){
  const {api,connected,docs,library,refresh,setError}=useLab(),navigate=useNavigate();
@@ -17,8 +18,8 @@ export default function Documents(){
  const [selectedCollection,setSelectedCollection]=useState(''),[selectedFolder,setSelectedFolder]=useState('');
  const [question,setQuestion]=useState(''),[mode,setMode]=useState('hybrid'),[busy,setBusy]=useState(false),[progress,setProgress]=useState('');
  const [detail,setDetail]=useState<Doc|null>(null),[versions,setVersions]=useState<Doc[]>([]);
- const [evidence,setEvidence]=useState<{excerpts:Source[];coverage:unknown;mode:string}|null>(null);
- const [answer,setAnswer]=useState<{reply:string;sources:Source[];seconds:number;citations_present:boolean;truncated:boolean;mode?:string}|null>(null),[source,setSource]=useState<Source|null>(null);
+ const [evidence,setEvidence]=useState<{excerpts:Source[];coverage:unknown;mode:string;retrieval:RetrievalStats}|null>(null);
+ const [answer,setAnswer]=useState<{reply:string;sources:Source[];seconds:number;citations_present:boolean;truncated:boolean;mode?:string;retrieval?:RetrievalStats}|null>(null),[source,setSource]=useState<Source|null>(null);
 
  async function loadTaxonomy(){
   if(!connected)return;
@@ -111,7 +112,7 @@ export default function Documents(){
    <select aria-label="Folder filter" value={selectedFolder} onChange={e=>setSelectedFolder(e.target.value)}><option value="">All folders</option>{folders.map(f=><option key={f.path} value={f.path}>{folderLabel(f)}</option>)}</select>
    <select value={mode} onChange={e=>setMode(e.target.value)}><option value="hybrid">Semantic + keyword (auto fallback)</option><option value="keyword">Keyword only</option></select><Button onClick={()=>void query()} disabled={!connected||busy||!question.trim()}><Search size={14}/>Retrieve</Button><Button onClick={()=>void query(true)} disabled={!connected||busy||!question.trim()}>Ask</Button>
   </div>
-  {evidence&&<><p className="muted small">Mode: {evidence.mode}. Hybrid uses semantic + keyword evidence when embeddings are available, then reranks exact/lexical matches; it falls back to keyword when embeddings are unavailable.</p>{evidence.excerpts.map((s,i)=><article className="passage" key={i}><button className="text-button" onClick={()=>setSource(s)}>[{s.source_id}] {s.name}</button><small>{s.locator} · rank {display(s.rank)}{s.folder?' · '+String(s.folder):''}</small><div className="score-row"><span>Keyword {display(s.keyword_matches)}</span><span>Cosine {display(s.cosine_similarity)}</span><span>Rerank {display(s.rerank_score??s.fusion_score)}</span></div><p>{s.text}</p></article>)}<details><summary>Raw retrieval response</summary><Json value={evidence}/></details></>}
-  {answer&&<><Markdown text={answer.reply} sources={answer.sources} onSource={setSource}/><p className="muted small">{seconds(answer.seconds)} · {answer.citations_present?'Citation markers supplied':'No recognized citation markers'} · {answer.truncated?'Output truncated · ':''}not saved to chat history</p>{answer.sources.map((s,i)=><button className="source-link" key={i} onClick={()=>setSource(s)}>[{s.source_id}] {s.name} · {s.locator}</button>)}</>}
+  {evidence&&<><p className="muted small">Mode: {evidence.mode}. Hybrid uses semantic + keyword evidence when embeddings are available, then reranks exact/lexical matches; it falls back to keyword when embeddings are unavailable.</p><div className="retrieval-diagnostics"><span>{seconds(evidence.retrieval.seconds)} retrieval</span><span>{Math.round(evidence.retrieval.match_strength*100)}% match strength</span><span>{evidence.retrieval.candidate_count} candidates</span><span>{evidence.retrieval.returned} returned</span></div>{evidence.excerpts.map((s,i)=><article className="passage" key={i}><button className="text-button" onClick={()=>setSource(s)}>[{s.source_id}] {s.name}</button><small>{s.locator} · rank {display(s.rank)}{s.folder?' · '+String(s.folder):''}</small><div className="score-row"><span>Keyword {display(s.keyword_matches)}</span><span>Cosine {display(s.cosine_similarity)}</span><span>Rerank {display(s.rerank_score??s.fusion_score)}</span></div><p>{s.text}</p></article>)}<details><summary>Raw retrieval response</summary><Json value={evidence}/></details></>}
+  {answer&&<><Markdown text={answer.reply} sources={answer.sources} onSource={setSource}/>{answer.retrieval&&<div className="retrieval-diagnostics"><span>{seconds(answer.retrieval.seconds)} retrieval</span><span>{Math.round(answer.retrieval.match_strength*100)}% match strength</span><span>{answer.retrieval.candidate_count} candidates</span></div>}<p className="muted small">{seconds(answer.seconds)} total · {answer.citations_present?'Citation markers supplied':'No recognized citation markers'} · {answer.truncated?'Output truncated · ':''}not saved to chat history</p>{answer.sources.map((s,i)=><button className="source-link" key={i} onClick={()=>setSource(s)}>[{s.source_id}] {s.name} · {s.locator}</button>)}</>}
  </section></div>{source&&<SourcePreview source={source} onClose={()=>setSource(null)}/>}</>;
 }

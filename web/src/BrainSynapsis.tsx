@@ -101,24 +101,39 @@ function stagePhase(stage:string):CognitivePhase{return stage==='reasoning'||sta
 export default function BrainSynapsis(){
  const {cognitive,status,api}=useLab();
  const [live,setLive]=useState<{stage:string;detail:string;intensity:number;duration_seconds?:number;started_at?:string;at?:string;previous?:{stage:string;duration_seconds:number;intensity:number}}|null>(null);
+ const [latest,setLatest]=useState<Record<string,unknown>|null>(null);
  const [clock,setClock]=useState(()=>Date.now());
  useEffect(()=>{const control=new AbortController();let buffer='';async function listen(){try{const response=await api.fetch('/cognitive',{signal:control.signal});if(!response.body)return;const reader=response.body.getReader(),decoder=new TextDecoder();while(!control.signal.aborted){const chunk=await reader.read();if(chunk.done)break;buffer+=decoder.decode(chunk.value,{stream:true});for(;;){const end=buffer.indexOf('\n\n');if(end<0)break;const block=buffer.slice(0,end);buffer=buffer.slice(end+2);const type=block.match(/^event:\s*(.+)$/m)?.[1];const raw=block.match(/^data:\s*(.+)$/m)?.[1];if(type==='cognitive'&&raw){try{setLive(JSON.parse(raw));setClock(Date.now());}catch{}}}}}catch(e){if(!control.signal.aborted)console.debug('cognitive stream unavailable',e);}}void listen();return()=>control.abort();},[api]);
  useEffect(()=>{if(!live||live.stage==='idle')return;const timer=setInterval(()=>setClock(Date.now()),250);return()=>clearInterval(timer);},[live?.stage,live?.started_at]);
+ useEffect(()=>{if(!status)return;let active=true;void api.get<{items:Array<{context:Record<string,unknown>}>}>('/lab/runs?limit=1&status=complete').then(result=>{if(active)setLatest(result.items[0]?.context||null);}).catch(()=>{});return()=>{active=false;};},[api,status?.generating]);
  const stale=Date.now()-cognitive.updated_at>120000;
  const phase:CognitivePhase=live?stagePhase(live.stage):(status?.generating&&stale?'thinking':stale?'idle':cognitive.phase);
  const current=lobes.find(l=>l.phase===phase);
  const started=live?.started_at?Date.parse(live.started_at):NaN;
  const elapsed=phase==='idle'?0:Math.max(live?.duration_seconds||0,Number.isFinite(started)?Math.max(0,(clock-started)/1000):0);
- const intensity=phase==='idle'?0:Math.min(1,0.22+Math.log1p(elapsed)*0.22);
+ const visualPulse=phase==='idle'?0:Math.min(1,.45+Math.log1p(elapsed)*.1);
+ const numeric=(key:string)=>{const value=latest?.[key];return typeof value==='number'?value:null;};
+ const seconds=(key:string)=>{const value=numeric(key);return value===null?'—':value.toFixed(3)+'s';};
+ const rate=(key:string)=>{const value=numeric(key);return value===null?'—':value.toFixed(1)+'/s';};
+ const prompt=numeric('prompt_tokens'),context=numeric('effective_context_size'),toolCalls=Array.isArray(latest?.tool_calls)?latest.tool_calls.length:0;
+ const utilization=numeric('context_utilization'),cache=numeric('cache_usage');
  return <div className="brain-page"><div className="brain-layout">
   <section className="brain-hero">
    <div className="brain-kicker">COGNITIVE ENGINE</div>
-   <div className="brain-heading"><div><h1>Brain Synapsis</h1><p>Live cognitive activity map</p></div><div className={'brain-state '+(phase!=='idle'?'active':'')}><Activity size={16}/><div><strong>{phase==='idle'?'Idle':live?.stage.replaceAll('_',' ')||cognitive.label}</strong><small>{current?current.name+' Active · '+elapsed.toFixed(1)+'s · '+Math.round(intensity*100)+'%':'No active region'}</small></div></div></div>
-   <BrainMap active={phase} intensity={intensity}/>
+   <div className="brain-heading"><div><h1>Brain Synapsis</h1><p>Live cognitive activity map</p></div><div className={'brain-state '+(phase!=='idle'?'active':'')}><Activity size={16}/><div><strong>{phase==='idle'?'Idle':live?.stage.replaceAll('_',' ')||cognitive.label}</strong><small>{current?current.name+' Active · '+elapsed.toFixed(1)+'s':'No active region'}</small></div></div></div>
+   <BrainMap active={phase} intensity={visualPulse}/>
+   <div className="brain-metrics" aria-label="Measured latest-run metrics">
+    <div><small>First token</small><strong>{seconds('first_token_seconds')}</strong></div>
+    <div><small>Prompt eval</small><strong>{seconds('prompt_eval_seconds')}</strong><em>{rate('prompt_tokens_per_second')}</em></div>
+    <div><small>Generation</small><strong>{seconds('generation_seconds')}</strong><em>{rate('generation_tokens_per_second')}</em></div>
+    <div><small>Context</small><strong>{prompt===null||context===null?'—':prompt+' / '+context}</strong><em>{utilization===null?'—':Math.round(utilization*100)+'%'}</em></div>
+    <div><small>Retrieval</small><strong>{seconds('context_retrieval_seconds')}</strong><em>{toolCalls+' tool call'+(toolCalls===1?'':'s')}</em></div>
+    <div><small>Prompt cache</small><strong>{cache===null?'—':Math.round(cache*100)+'%'}</strong><em>{String(latest?.execution_mode||'—')}</em></div>
+   </div>
   </section>
   <aside className="brain-regions">
    <div className="brain-regions-title"><Activity size={16}/><div><h2>BRAIN REGIONS & AGENT STATES</h2><p>Each region reflects a different part of Keno-B's active pipeline.</p></div></div>
    {lobes.map(({phase:p,name,subtitle,detail,Icon})=><article key={p} className={'brain-region-card '+(phase===p?'active':'')}><div className="region-icon"><Icon size={28}/></div><div><div className="region-card-head"><h3>{name}</h3><span><b/> {phase===p?'ACTIVE':'INACTIVE'}</span></div><strong>{subtitle}</strong><p>{detail}</p></div></article>)}
   </aside>
- </div><p className="brain-note">Open Brain Synapsis in a second tab while using Chat to watch the regions change live.</p></div>;
+ </div><p className="brain-note">The animated pulse is visual only. Timing, throughput, context, retrieval and cache values are measured from the latest completed run.</p></div>;
 }

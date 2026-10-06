@@ -418,3 +418,8 @@ Routine greetings/check-ins omit recent/older chat text. Standalone questions sk
 Explicit Indonesian/English switches are stored per conversation in settings after a completed turn and survive restarts and history trimming. A confirmation such as “yea switch” is linked to the preceding user language-capability question. Existing chats can recover explicit choices from the last 200 completed user turns; other chats remain independent. Deleting a chat also deletes its language preference. A model can still give an incorrect answer; this change does not certify factual accuracy.
 
 After rebuilding only backend, compare `bash scripts/timings.sh` for a greeting, a standalone question, and a follow-up. It now reports `context_policy` and `reply_language`. Routine greetings should show zero history turns and no summary/older retrieval. Actual token counts and speed depend on configured personality/preferences, model cache, and CPU. Cold requests still need to evaluate the remaining shared prompt; no exact latency improvement is promised.
+
+
+## Performance-safe intelligence telemetry
+
+Keno-B records measured prompt/context utilization, llama.cpp prompt/generation throughput, first-token latency, retrieval duration and deterministic retrieval match strength without adding an inference pass. Memory corrections preserve local version history and explicit forget operations erase that history. Agent work stays bounded by execution mode: Fast uses one planning round and up to 3 tool calls, Balanced keeps 2 rounds / 4 calls, and Deep can use up to 4 rounds / 6 calls. The Brain Synapsis pulse remains a visualization; its metric cards report measured values from completed runs.
