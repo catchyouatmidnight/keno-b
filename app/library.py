@@ -82,7 +82,9 @@ class Query(BaseModel):
     question:str=Field(min_length=1,max_length=2000)
     document_ids:list[str]=Field(default_factory=list,max_length=10)
     collections:list[str]=Field(default_factory=list,max_length=10)
-    mode:str=Field(default='hybrid',pattern='^(hybrid|keyword)
+    mode:str=Field(default='hybrid',pattern='^(hybrid|keyword)$')
+    max_tokens:int=Field(default=512,ge=64,le=2048)
+
 @router.get('/status')
 def status():
     try:document_key();ready=True;detail=None
