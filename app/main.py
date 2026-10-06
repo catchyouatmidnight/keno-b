@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import json
+import math
 import os
 import re
 import secrets
@@ -236,7 +237,9 @@ async def lifespan(app):
             LLM_MODEL = staged
     app.state.generation_lock = asyncio.Lock()
     app.state.cognitive_subscribers = set()
-    app.state.cognitive_state = {"stage": "idle", "detail": "Waiting for activity", "intensity": 0.0, "at": now()}
+    app.state.cognitive_started_monotonic = time.monotonic()
+    app.state.cognitive_state = {"stage": "idle", "detail": "Waiting for activity", "intensity": 0.0,
+                                 "duration_seconds": 0.0, "started_at": now(), "at": now()}
     app.state.llm = httpx.AsyncClient(base_url=LLM_URL, timeout=httpx.Timeout(300, connect=5), trust_env=False)
     app.state.laya = httpx.AsyncClient(base_url=LAYA_URL, timeout=httpx.Timeout(20, connect=3), trust_env=False)
     app.state.lookup = httpx.AsyncClient(base_url=LOOKUP_URL, timeout=httpx.Timeout(20, connect=3), trust_env=False,
@@ -767,7 +770,7 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
     if has_uploads:
         prompt+="Supplied uploads are local file contents: analyze them directly without internet access. Cite filenames/pages, preserve dates, distinguish recommendations and disclose missing coverage.\n"
     if available_tools:
-        prompt+="Use only supplied tools. Save lasting user facts using exact USER evidence, never file/assistant text; only successful saves persist. Forget only on request. Use successful tool results for answers. Live lookup needs an explicit request; never send profile, files, assistant text, or unrelated history. A validated web-search follow-up may reuse only the prior query that was already sent.\n"
+        prompt+="Use only supplied tools. Save lasting user facts using exact USER evidence, never file/assistant text; only successful saves persist. Forget only on request. A temporary research result may be saved only with memory_save_result when the current USER explicitly asked to save/remember the result, and its quote must come verbatim from a successful tool result in this request. Use successful tool results for answers. Live lookup needs an explicit request; never send profile, files, assistant text, or unrelated history. A validated web-search follow-up may reuse only the prior query that was already sent.\n"
         if "web_search" in available_tools:
             prompt+="For web-search answers, use only facts explicitly supported by returned snippets or fetched page excerpts. Prefer page-fetched evidence over snippets, higher-quality sources over weak matches, and verification metadata when present. Never invent or silently reconcile dates, scores, names, or other details. If verification reports a conflict, state the conflict and avoid asserting the disputed detail unless a stronger third source resolves it. Keep the answer concise.\n"
     return prompt
@@ -782,8 +785,11 @@ async def fit_context(value, route=None, attachments=None):
         definitions = [d for d in definitions if not d["function"]["name"].startswith("memory_")]
         if route.get("tool_family") == "memory":
             route.update(tool_family="none", tool_policy="memory_disabled")
-    if route.get("tool_policy") in {"explicit_web_search", "web_search_followup"}:
-        definitions = [d for d in definitions if d["function"]["name"] == "web_search"]
+    if route.get("tool_policy") == "explicit_web_search_and_save":
+        has_search = any(d["function"]["name"] == "web_search" for d in definitions)
+        definitions = [d for d in definitions if has_search and d["function"]["name"] in {"web_search", "web_inspect", "memory_save_result"}]
+    elif route.get("tool_policy") in {"explicit_web_search", "web_search_followup"}:
+        definitions = [d for d in definitions if d["function"]["name"] in {"web_search", "web_inspect"}]
     elif route.get("tool_policy") == "web_search_needs_query":
         definitions = []
     direct_document = bool(attachments) and (
@@ -817,7 +823,7 @@ async def fit_context(value, route=None, attachments=None):
         policy["recent_limit"] = min(policy["recent_limit"], limits["history"])
         if value.execution_mode == "deep" and policy["mode"] == "followup":
             policy["recent_limit"] = min(6, max(policy["recent_limit"], 4))
-        if route.get("tool_policy") == "explicit_web_search":
+        if route.get("tool_policy") in {"explicit_web_search", "explicit_web_search_and_save"}:
             policy={"mode": "web_search", "recent_limit": 0, "older": False}
         elif route.get("tool_policy") == "web_search_followup":
             policy={"mode": "followup", "recent_limit": 1, "older": False}
@@ -908,9 +914,34 @@ def event(name, value):
     return f"event: {name}\ndata: {json.dumps(value, ensure_ascii=False)}\n\n"
 
 
-async def publish_cognitive(stage, detail="", intensity=0.6, request_id=None):
-    payload = {"stage": stage, "detail": detail, "intensity": max(0.0, min(1.0, float(intensity))),
+def cognitive_intensity(duration):
+    duration = max(0.0, float(duration))
+    return round(min(1.0, 0.22 + math.log1p(duration) * 0.22), 3)
+
+
+async def publish_cognitive(stage, detail="", request_id=None):
+    current = getattr(app.state, "cognitive_state", {"stage": "idle"})
+    current_stage = current.get("stage", "idle")
+    stamp = time.monotonic()
+    previous_duration = 0.0
+    previous = None
+    if current_stage != "idle":
+        previous_duration = max(0.0, stamp - getattr(app.state, "cognitive_started_monotonic", stamp))
+        previous = {"stage": current_stage, "duration_seconds": round(previous_duration, 3),
+                    "intensity": cognitive_intensity(previous_duration)}
+    if stage != current_stage:
+        app.state.cognitive_started_monotonic = stamp
+        started_at = now()
+        elapsed = 0.0
+    else:
+        started_at = current.get("started_at") or now()
+        elapsed = max(0.0, stamp - getattr(app.state, "cognitive_started_monotonic", stamp))
+    intensity = 0.0 if stage == "idle" else cognitive_intensity(elapsed)
+    payload = {"stage": stage, "detail": detail, "intensity": intensity,
+               "duration_seconds": round(elapsed, 3), "started_at": started_at,
                "request_id": request_id, "at": now()}
+    if previous and stage != current_stage:
+        payload["previous"] = previous
     app.state.cognitive_state = payload
     stale = []
     for queue in tuple(app.state.cognitive_subscribers):
@@ -1116,7 +1147,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                                 tool_model_seconds=0.0, tool_execution_seconds=0.0,
                                 tool_planning_rounds=0, tool_planning_mode="direct_evidence")
             model_started = time.monotonic()
-            web_answer = metadata.get("route", {}).get("tool_policy") in {"explicit_web_search", "web_search_followup"}
+            web_answer = metadata.get("route", {}).get("tool_policy") in {"explicit_web_search", "web_search_followup", "explicit_web_search_and_save"}
             answer_tokens = min(metadata["effective_max_tokens"], 384) if web_answer else metadata["effective_max_tokens"]
             payload = {"model": LLM_MODEL, "messages": messages, "stream": True,
                        "temperature": 0.2 if web_answer else 0.6, "max_tokens": answer_tokens + metadata.get("thinking_budget", 0),
@@ -1251,6 +1282,7 @@ async def chat(value: ChatInput):
     if app.state.generation_lock.locked():
         raise HTTPException(409, "Assistant is busy; retry after the current response finishes", headers={"Retry-After": "3"})
     await app.state.generation_lock.acquire()
+    await publish_cognitive("route_started", "Routing request", value.request_id)
     try:
         prepare_started = time.monotonic()
         attachments = attachment_rows(value.conversation_id, value.attachment_ids)
@@ -1267,6 +1299,7 @@ async def chat(value: ChatInput):
         calendar_result = calendar_tools.calculate(value.message,[str(t["user_text"]) for t in prior]) if not attachments else None
         route = deterministic_attachment_route(attachments, value.message, value.execution_mode)
         if route is None and not attachments:
+            search_save_query = tools.web_search_and_save(value.message)
             search_query = tools.explicit_web_search(value.message)
             search_followup = tools.web_search_followup(value.message, previous_user)
             continued_search = None
@@ -1278,6 +1311,8 @@ async def chat(value: ChatInput):
                 continued_search = continued_web_query(previous_query, value.message)
             if tools.bare_web_search(value.message):
                 route = deterministic_route("web_search_needs_query")
+            elif search_save_query:
+                route = deterministic_route("explicit_web_search_and_save", "multiple", search_save_query)
             elif search_query:
                 route = deterministic_route("explicit_web_search", "live", search_query)
             elif search_followup:
@@ -1298,6 +1333,14 @@ async def chat(value: ChatInput):
         if not attachments and re.fullmatch(r"(?:tell me more|expand on that|explain further)[.!?]*", value.message.strip(), re.I):
             route.update(tool_family='none', tool_policy='followup_expansion')
         route = apply_execution_mode(route, value)
+        if route.get("vision"):
+            await publish_cognitive("vision", "Visual input processing", value.request_id)
+        elif attachments or route.get("tool_family") == "documents":
+            await publish_cognitive("retrieval", "Document evidence retrieval", value.request_id)
+        elif route.get("tool_family") == "memory":
+            await publish_cognitive("memory_search", "Memory context retrieval", value.request_id)
+        elif route.get("thinking"):
+            await publish_cognitive("reasoning", "Reasoning stage active", value.request_id)
         messages, metadata = await fit_context(value, route, attachments)
         if calendar_result is not None:
             metadata["calendar_calculation"] = calendar_result
@@ -1320,35 +1363,24 @@ async def chat(value: ChatInput):
             started = False
             generation_announced = False
             try:
-                route_state = metadata.get("route", {})
-                payload = await publish_cognitive("route_started", "Routing and context prepared", .35, value.request_id)
-                yield event("cognitive", payload)
-                if route_state.get("vision"):
-                    payload = await publish_cognitive("vision", "Visual input processing", .8, value.request_id)
-                    yield event("cognitive", payload)
-                elif attachments or route_state.get("tool_family") == "documents":
-                    payload = await publish_cognitive("retrieval", "Document evidence retrieval", .72, value.request_id)
-                    yield event("cognitive", payload)
-                elif route_state.get("thinking"):
-                    payload = await publish_cognitive("reasoning", "Reasoning stage active", .7, value.request_id)
-                    yield event("cognitive", payload)
+                yield event("cognitive", app.state.cognitive_state)
                 yield event("context", metadata)
                 started = True
                 async for name, data in generator:
                     if name == "tool":
                         tool_name = str(data.get("name", "tool"))
-                        stage = "memory_save" if tool_name == "memory_save" else "memory_search" if tool_name in {"memory_search", "memory_forget"} else "retrieval" if tool_name in {"document_search", "document_overview", "document_pages", "web_search"} else "tool"
-                        payload = await publish_cognitive(stage, tool_name.replace("_", " "), .85, value.request_id)
+                        stage = "memory_save" if tool_name in {"memory_save", "memory_save_result"} else "memory_search" if tool_name in {"memory_search", "memory_forget"} else "retrieval" if tool_name in {"document_search", "document_overview", "document_read", "document_pages", "web_search", "web_inspect"} else "tool"
+                        payload = await publish_cognitive(stage, tool_name.replace("_", " "), value.request_id)
                         yield event("cognitive", payload)
                     elif name == "delta" and not generation_announced:
                         generation_announced = True
-                        payload = await publish_cognitive("generation", "Generating response", .9, value.request_id)
+                        payload = await publish_cognitive("generation", "Generating response", value.request_id)
                         yield event("cognitive", payload)
                     yield event(name, data)
-                payload = await publish_cognitive("idle", "Response complete", 0.0, value.request_id)
+                payload = await publish_cognitive("idle", "Response complete", value.request_id)
                 yield event("cognitive", payload)
             except (httpx.HTTPError, ValueError, KeyError):
-                payload = await publish_cognitive("idle", "Request failed", 0.0, value.request_id)
+                payload = await publish_cognitive("idle", "Request failed", value.request_id)
                 yield event("cognitive", payload)
                 yield event("error", {"detail": "Local inference failed. Partial output was not saved. Retry using the same request_id."})
             finally:
@@ -1360,11 +1392,21 @@ async def chat(value: ChatInput):
                     app.state.generation_lock.release()
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
     try:
+        generation_announced = False
         async with aclosing(generate(value, messages, metadata, request_started, attachments)) as generator:
             async for name, data in generator:
+                if name == "tool":
+                    tool_name = str(data.get("name", "tool"))
+                    stage = "memory_save" if tool_name in {"memory_save", "memory_save_result"} else "memory_search" if tool_name in {"memory_search", "memory_forget"} else "retrieval" if tool_name in {"document_search", "document_overview", "document_read", "document_pages", "web_search", "web_inspect"} else "tool"
+                    await publish_cognitive(stage, tool_name.replace("_", " "), value.request_id)
+                elif name == "delta" and not generation_announced:
+                    generation_announced = True
+                    await publish_cognitive("generation", "Generating response", value.request_id)
                 if name == "done":
+                    await publish_cognitive("idle", "Response complete", value.request_id)
                     return data
     except (httpx.HTTPError, ValueError, KeyError):
+        await publish_cognitive("idle", "Request failed", value.request_id)
         raise HTTPException(502, "Local inference failed. Retry using the same request_id.")
 
 

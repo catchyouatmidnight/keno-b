@@ -24,6 +24,12 @@ WEB_SEARCH_QUERY = re.compile(
     r"search(?:\s+(?:from|on))?\s+(?:google|the\s+web|web|online)\s+(?:for\s+)?|"
     r"search\s+(?:for\s+)?|google\s+(?:for\s+)?|look\s+up\s+(?:online\s+)?"
     r")(?P<query>\S.{0,299}?)\s*[?.!]*$", re.I)
+WEB_SEARCH_SAVE = re.compile(
+    r"^\s*(?:please\s+)?(?:"
+    r"search(?:\s+(?:from|on))?\s+(?:google|the\s+web|web|online)\s+(?:for\s+)?|"
+    r"search\s+(?:for\s+)?|google\s+(?:for\s+)?|look\s+up\s+(?:online\s+)?"
+    r")(?P<query>\S.{0,240}?)\s+(?:and|then)\s+(?:please\s+)?(?:remember|save)\s+"
+    r"(?:the\s+|this\s+|that\s+)?(?:result|answer|information|finding|findings)\s*[?.!]*$", re.I)
 SEARCH_FOLLOWUP_SKIP = re.compile(
     r"^\s*(?:thanks|thank\s+you|ok|okay|yes|yeah|yep|no|cancel|stop|never\s*mind)\s*[?.!]*$", re.I)
 LOCAL_SEARCH_TARGET = re.compile(
@@ -38,8 +44,18 @@ def bare_web_search(text):
     return isinstance(text, str) and bool(BARE_WEB_SEARCH.fullmatch(text.strip()))
 
 
+def web_search_and_save(text):
+    if not isinstance(text, str):
+        return None
+    match = WEB_SEARCH_SAVE.fullmatch(text.strip())
+    if not match:
+        return None
+    query = match.group("query").strip()
+    return query if query and re.search(r"\w", query) else None
+
+
 def explicit_web_search(text):
-    if not isinstance(text, str) or bare_web_search(text):
+    if not isinstance(text, str) or bare_web_search(text) or web_search_and_save(text):
         return None
     match = WEB_SEARCH_QUERY.fullmatch(text)
     if not match:
@@ -177,13 +193,17 @@ SPECS = {
                     {"city": STRING}, ["city"]),
     "web_search": spec("web_search", "Search the web for an explicit current user request. Model-generated queries must be a verbatim span of the current request. A server-validated search follow-up may reuse only the prior query already sent to search. Never send file contents, memories or assistant text. Returns ranked snippets plus bounded page-fetched evidence and verification metadata when available.",
                        {"query": STRING}, ["query"]),
+    "web_inspect": spec("web_inspect", "Inspect one result from the most recent web_search. source_index is 1-based and may only refer to that search result set. This reuses already fetched bounded evidence and does not browse arbitrary URLs.",
+                        {"source_index": {"type": "integer", "minimum": 1, "maximum": 3}}, ["source_index"]),
+    "memory_save_result": spec("memory_save_result", "Save a short temporary research result only when the current user explicitly asked to save or remember the result. quote must be copied verbatim from evidence returned by a successful tool in this same request.",
+                               {"key": STRING, "quote": STRING}, ["key", "quote"]),
 }
 
 
 def catalog(family, settings, message, attachments):
-    groups = {"memory": ["memory_search", "memory_save", "memory_forget"],
+    groups = {"memory": ["memory_search", "memory_save", "memory_forget", "memory_save_result"],
               "documents": ["document_search", "document_read", "document_overview"],
-              "calculator": ["calculator"], "live": ["weather", "web_search"], "none": []}
+              "calculator": ["calculator"], "live": ["weather", "web_search", "web_inspect"], "none": []}
     names = sum((groups[name] for name in ("memory", "documents", "calculator", "live")), []) if family == "multiple" else groups.get(family, [])
     if not attachments:
         names = [n for n in names if not n.startswith("document_")]
@@ -192,7 +212,9 @@ def catalog(family, settings, message, attachments):
     if not settings["weather_enabled"]:
         names = [n for n in names if n != "weather"]
     if not settings["search_enabled"]:
-        names = [n for n in names if n != "web_search"]
+        names = [n for n in names if n not in {"web_search", "web_inspect"}]
+    if not WRITE_REQUEST.search(message):
+        names = [n for n in names if n != "memory_save_result"]
     return [SPECS[n] for n in names]
 
 
@@ -237,6 +259,7 @@ class ToolSession:
         self.weather_results, self.weather_city = [], None
         self.search_results = []
         self.web_verification = None
+        self.research_evidence = []
 
     def rows(self, query=""):
         with self.db() as c:
@@ -277,6 +300,19 @@ class ToolSession:
             query = args["query"]
             if not isinstance(query, str) or len(query) > 200: raise ToolValidationError("Memory query exceeds limit")
             return {"memories": self.rows(query)}
+        if name == "memory_save_result":
+            if not WRITE_REQUEST.search(self.value.message):
+                raise ToolValidationError("Saving a tool result requires an explicit current-user save or remember request")
+            key, quote = args["key"], args["quote"]
+            if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,100}", key):
+                raise ToolValidationError("Invalid memory key")
+            if not isinstance(quote, str) or not 1 <= len(quote) <= 500:
+                raise ToolValidationError("Saved result must contain 1–500 characters")
+            if not any(quote.casefold() in evidence.casefold() for evidence in self.research_evidence):
+                raise ToolValidationError("Saved result must be copied verbatim from a successful tool result in this request")
+            self.mutations.append({"action": "save", "key": key, "quote": quote, "category": "temporary"})
+            return {"key": key, "content": quote, "saved": True, "category": "temporary",
+                    "provenance": "tool_result", "commits_with_answer": True}
         if name in {"memory_save", "memory_forget"}:
             key = args["key"]
             if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,100}", key): raise ToolValidationError("Invalid memory key")
@@ -311,8 +347,29 @@ class ToolSession:
                 result["coverage"] = {"requested_pages": sorted(set(pages)), "represented_pages": sorted({e["page"] or 1 for e in excerpts}), "scope": "selected pages only"}
                 result["no_extracted_text"] = not bool(excerpts)
             self.sources.extend({k: e[k] for k in ("attachment_id", "name", "page", "chunk")} for e in excerpts)
+            self.research_evidence.extend(str(e.get("text", "")) for e in excerpts if e.get("text"))
             return result
-        if name == "calculator": return calculate(args["expression"])
+        if name == "calculator":
+            result = calculate(args["expression"])
+            self.research_evidence.append(f"{result['expression']} = {result['result']}")
+            return result
+        if name == "web_inspect":
+            if not self.settings["search_enabled"]:
+                raise ToolValidationError("This external lookup is disabled")
+            index = args["source_index"]
+            if type(index) is not int or not 1 <= index <= 3 or not self.search_results:
+                raise ToolValidationError("Inspect a 1-based result from a successful web search in this request")
+            rows = self.search_results[-1]["result"].get("results", [])
+            if index > len(rows):
+                raise ToolValidationError("Web result index is outside the current search result set")
+            row = rows[index - 1]
+            evidence = row.get("page_excerpt") or row.get("snippet") or ""
+            if evidence:
+                self.research_evidence.append(str(evidence))
+            return {"source_index": index, "title": row.get("title"), "url": row.get("url"),
+                    "published_at": row.get("published_at"), "quality_score": row.get("quality_score"),
+                    "evidence": evidence, "facts": row.get("facts", {}),
+                    "page_fetched": bool(row.get("page_fetched"))}
         if name in {"weather", "web_search"}:
             enabled = self.settings["weather_enabled" if name == "weather" else "search_enabled"]
             if not enabled: raise ToolValidationError("This external lookup is disabled")
@@ -335,6 +392,7 @@ class ToolSession:
             if name == "weather":
                 if not isinstance(result.get("current"), dict): raise ToolValidationError("Invalid weather result")
                 self.weather_results.append({"city": text, "result": result})
+                self.research_evidence.append(json.dumps(result, ensure_ascii=False)[:4000])
             else:
                 if not isinstance(result.get("results"), list): raise ToolValidationError("Invalid web search result")
                 verification = result.get("verification") if isinstance(result.get("verification"), dict) else {}
@@ -359,6 +417,11 @@ class ToolSession:
                 result["coverage"] = str(result.get("coverage") or "Bounded search evidence")
                 self.web_verification = {**verification, "cache_hit": bool(result.get("cache_hit"))}
                 self.search_results.append({"query": text, "result": result})
+                for row in compact:
+                    if row.get("page_excerpt"):
+                        self.research_evidence.append(str(row["page_excerpt"]))
+                    elif row.get("snippet"):
+                        self.research_evidence.append(str(row["snippet"]))
             self.web_sources.extend(result.get("sources", []))
             return result
         raise ToolValidationError("Tool is not implemented")
@@ -420,7 +483,7 @@ def web_search_reply(session, metadata=None):
     policy = (metadata or {}).get("route", {}).get("tool_policy")
     if policy == "web_search_needs_query":
         return "What would you like me to search for?"
-    if policy not in {"explicit_web_search", "web_search_followup"}:
+    if policy not in {"explicit_web_search", "web_search_followup", "explicit_web_search_and_save"}:
         return None
     if not session.settings["search_enabled"]:
         return "Web search is off. Enable Search in Tools, then tell me what to look up."

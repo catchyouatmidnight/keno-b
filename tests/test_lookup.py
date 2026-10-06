@@ -37,3 +37,34 @@ def test_optional_lookup_auth_fixed_destinations_and_bad_provider_payload(monkey
         malformed=True
         assert client.post('/weather',json={'city':'Jakarta'}).status_code==502
         assert client.post('/search',json={'query':'different query'}).status_code==502
+
+
+
+def test_search_detects_generic_claim_conflict_and_uses_third_source(monkeypatch):
+    spec=importlib.util.spec_from_file_location('lookup_server_claims','lookup-service/server.py')
+    lookup=importlib.util.module_from_spec(spec);spec.loader.exec_module(lookup)
+    monkeypatch.setattr(lookup,'KEY','x'*40)
+    monkeypatch.setattr(lookup,'public_target',lambda url: True)
+    pages={
+        'one.example':'<article>Final attendance: 50000. The final was played in Jakarta.</article>',
+        'two.example':'<article>Final attendance: 52000. The final was played in Jakarta.</article>',
+        'three.example':'<article>Final attendance: 50000. Official match report.</article>',
+    }
+    def outbound(request):
+        if request.url.host=='search':
+            return httpx.Response(200,json={'results':[
+                {'title':'Official report','url':'https://one.example/report','content':'attendance final'},
+                {'title':'Second report','url':'https://two.example/report','content':'attendance final'},
+                {'title':'Third report','url':'https://three.example/report','content':'attendance final'},
+            ]})
+        return httpx.Response(200,headers={'content-type':'text/html'},text=pages[request.url.host])
+    with TestClient(lookup.app) as client:
+        lookup.app.state.http=httpx.AsyncClient(transport=httpx.MockTransport(outbound))
+        client.headers['Authorization']='Bearer '+'x'*40
+        result=client.post('/search',json={'query':'final attendance'}).json()
+        assert len(result['results'])==3
+        assert result['verification']['status']=='verified_after_conflict'
+        assert result['verification']['conflict'] is False
+        assert result['verification']['verified_from']==2
+        assert result['verification']['resolved_conflicts']
+        assert result['results'][0]['page']['facts']['claims']

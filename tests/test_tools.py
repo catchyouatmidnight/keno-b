@@ -276,9 +276,12 @@ def test_web_search_executes_explicit_requests_and_clarified_followups(client, m
     second = send(client, conversation, request_id='search-followup-001', message=query).json()
     assert outbound == [('/search', {'query': query})]
     assert second['context']['route']['tool_policy'] == 'web_search_followup'
-    assert second['context']['available_tools'] == ['web_search']
+    assert second['context']['available_tools'] == ['web_search', 'web_inspect']
     assert second['context']['tool_planning_rounds'] == 0
-    assert second['context']['tool_calls'] == [{'name': 'web_search', 'status': 'complete', 'index': 1}]
+    assert [item['name'] for item in second['context']['tool_calls']] == ['web_search', 'web_inspect', 'web_inspect']
+    assert all(item['status'] == 'complete' for item in second['context']['tool_calls'])
+    assert second['context']['retrieval_seconds'] >= 0
+    assert second['context']['action_tool_seconds'] == 0
     assert len(second['context']['web_sources']) == 2
     assert second['context']['web_sources'][0]['url'] == 'https://example.com/match-0'
     assert second['context']['route']['call_count'] == 0
@@ -312,6 +315,7 @@ def test_web_search_executes_explicit_requests_and_clarified_followups(client, m
     assert outbound == [('/search', {'query': 'Keno-B release notes'})]
     assert direct['context']['route']['tool_policy'] == 'explicit_web_search'
     assert direct['context']['tool_planning_mode'] == 'explicit_web_search'
+    assert [item['name'] for item in direct['context']['agent_steps']] == ['web_search', 'web_inspect', 'web_inspect']
     assert all(body.get('stream') for path, body in direct_calls if path == '/v1/chat/completions')
 
 
@@ -750,3 +754,24 @@ def test_natural_corrections_are_followups():
     assert context_policy.plan('i mean the final', prior)['mode'] == 'followup'
     assert context_policy.plan('it was yesterday', prior)['mode'] == 'followup'
     assert context_policy.plan('the final match', prior)['recent_limit'] == 4
+
+
+
+def test_web_result_save_requires_explicit_request_and_tool_evidence(client):
+    client.put('/api/v1/tools/settings', json={'search_enabled': True})
+    conversation = new_conversation(client)
+    value = main.ChatInput(conversation_id=conversation, message='Search the web for launch date and remember the result.',
+                           request_id='save-web-result-001')
+    session = tools.ToolSession(value, [], {'automatic_memory':True,'weather_enabled':False,'search_enabled':True},
+                                main.db, main.now, main.app.state.lookup, {'web_search_query':'launch date'})
+    session.research_evidence.append('Launch date: 12 October 2026.')
+    async def run():
+        saved = await session.execute('memory_save_result', {'key':'research.launch_date','quote':'Launch date: 12 October 2026.'})
+        assert saved['category'] == 'temporary'
+        with pytest.raises(tools.ToolValidationError):
+            await session.execute('memory_save_result', {'key':'research.bad','quote':'Invented result'})
+    asyncio.run(run())
+    with main.db() as connection:
+        session.commit(connection)
+    stored = client.get('/api/v1/memories?q=launch').json()
+    assert any(item['key']=='research.launch_date' and item['category']=='temporary' for item in stored)

@@ -22,7 +22,7 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         allowed = {"memory_save"}
     metadata["tool_save_required"] = required_save
     started, count = time.monotonic(), 0
-    planning_seconds, execution_seconds, rounds = 0.0, 0.0, 0
+    planning_seconds, execution_seconds, retrieval_seconds, action_seconds, rounds = 0.0, 0.0, 0.0, 0.0, 0
     name_save = tools.explicit_name_save(session.value.message) if required_save else None
     direct_save = name_save or (tools.explicit_field_save(session.value.message) if required_save else None)
     natural = tools.natural_memory(session.value.message, session.settings) if not session.attachments else None
@@ -31,13 +31,15 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         direct_save = natural[1]
     direct_forget = natural[1] if natural and natural[0] == 'memory_forget' else None
     direct_calculation = tools.explicit_calculation(session.value.message) if "calculator" in allowed and metadata.get("route", {}).get("tool_policy") == "explicit_calculation" else None
-    direct_web = metadata.get("route", {}).get("web_search_query") if "web_search" in allowed and metadata.get("route", {}).get("tool_policy") in {"explicit_web_search", "web_search_followup"} else None
+    direct_web = metadata.get("route", {}).get("web_search_query") if "web_search" in allowed and metadata.get("route", {}).get("tool_policy") in {"explicit_web_search", "web_search_followup", "explicit_web_search_and_save"} else None
     direct_web = direct_web if isinstance(direct_web, str) and direct_web.strip() else None
-    metadata['tool_planning_mode'] = 'natural_memory' if natural else 'explicit_name_save' if name_save else 'explicit_field_save' if direct_save else 'explicit_calculation' if direct_calculation else 'explicit_web_search' if direct_web else 'model'
+    metadata['tool_planning_mode'] = 'natural_memory' if natural else 'explicit_name_save' if name_save else 'explicit_field_save' if direct_save else 'explicit_calculation' if direct_calculation else 'explicit_web_search_and_save' if direct_web and metadata.get('route', {}).get('tool_policy') == 'explicit_web_search_and_save' else 'explicit_web_search' if direct_web else 'model'
     mode = metadata.get("execution_mode", metadata.get("route", {}).get("execution_mode", "balanced"))
     round_limit = 1 if mode == "fast" else 4 if mode == "deep" else tools.MAX_ROUNDS
     metadata["agent_step_limit"] = round_limit
     planner_thinking = bool(metadata.get('route', {}).get('thinking', False)) and not required_save and not direct_web
+    required_result_save = bool(direct_web and metadata.get('route', {}).get('tool_policy') == 'explicit_web_search_and_save' and 'memory_save_result' in allowed)
+    metadata['tool_result_save_required'] = required_result_save
     planner_budget = metadata.get('thinking_budget', 0) if planner_thinking else 0
     metadata['tool_thinking_budget'] = planner_budget
     if direct_save:
@@ -46,7 +48,9 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         yield 'tool', event
         execution_started = time.monotonic()
         result = await session.execute('memory_save', direct_save)
-        execution_seconds = time.monotonic() - execution_started
+        elapsed = time.monotonic() - execution_started
+        execution_seconds += elapsed
+        action_seconds += elapsed
         event = {**event, 'status': 'complete', 'memory_key': result['key']}
         session.events.append(event)
         yield 'tool', event
@@ -55,7 +59,9 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         yield 'tool', event
         execution_started = time.monotonic()
         result = await session.execute('memory_forget', direct_forget)
-        execution_seconds = time.monotonic() - execution_started
+        elapsed = time.monotonic() - execution_started
+        execution_seconds += elapsed
+        action_seconds += elapsed
         event = {**event, 'status': 'complete', 'memory_key': result['key']}
         session.events.append(event)
         yield 'tool', event
@@ -64,13 +70,16 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         yield 'tool', event
         execution_started = time.monotonic()
         result = await session.execute('calculator', direct_calculation)
-        execution_seconds = time.monotonic() - execution_started
+        elapsed = time.monotonic() - execution_started
+        execution_seconds += elapsed
+        action_seconds += elapsed
         event = {**event, 'status': 'complete'}
         session.events.append(event)
         metadata['_calculation_reply'] = f"{result['expression']} = {result['result']}."
         yield 'tool', event
     if direct_web:
-        event = {'name': 'web_search', 'status': 'running', 'index': 1}
+        count += 1
+        event = {'name': 'web_search', 'status': 'running', 'index': count}
         yield 'tool', event
         execution_started = time.monotonic()
         args = {'query': direct_web}
@@ -81,7 +90,9 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
             detail = str(error) if isinstance(error, tools.ToolValidationError) else "Tool failed validation or is unavailable. Do not claim it succeeded."
             result = {'error': detail}
             status = 'failed'
-        execution_seconds = time.monotonic() - execution_started
+        elapsed = time.monotonic() - execution_started
+        execution_seconds += elapsed
+        retrieval_seconds += elapsed
         result_event = {**event, 'status': status}
         if status == 'failed':
             result_event['detail'] = result['error']
@@ -93,12 +104,46 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                 'id': call_id, 'type': 'function',
                 'function': {'name': 'web_search', 'arguments': json.dumps(args, ensure_ascii=False)}}]})
             messages.append({'role': 'tool', 'tool_call_id': call_id, 'content': json.dumps(result, ensure_ascii=False)})
-    for round_number in range(0 if direct_save or direct_forget or direct_calculation or direct_web else round_limit):
+            inspect_count = min(3 if result.get('verification', {}).get('conflict') else 2, len(result.get('results', [])))
+            for source_index in range(1, inspect_count + 1):
+                if count >= tools.MAX_CALLS - (1 if required_result_save else 0):
+                    break
+                count += 1
+                inspect_event = {'name': 'web_inspect', 'status': 'running', 'index': count, 'source_index': source_index}
+                yield 'tool', inspect_event
+                inspect_started = time.monotonic()
+                try:
+                    inspected = await session.execute('web_inspect', {'source_index': source_index})
+                    inspect_status = 'complete'
+                except (ValueError, TypeError, KeyError, SyntaxError, ArithmeticError, httpx.HTTPError) as error:
+                    inspected = {'error': str(error) if isinstance(error, tools.ToolValidationError) else "Inspection failed."}
+                    inspect_status = 'failed'
+                elapsed = time.monotonic() - inspect_started
+                execution_seconds += elapsed
+                retrieval_seconds += elapsed
+                inspect_done = {**inspect_event, 'status': inspect_status}
+                if inspect_status == 'failed':
+                    inspect_done['detail'] = inspected['error']
+                session.events.append(inspect_done)
+                yield 'tool', inspect_done
+                inspect_id = f'keno_direct_web_{count}'
+                messages.append({'role': 'assistant', 'content': '', 'tool_calls': [{
+                    'id': inspect_id, 'type': 'function',
+                    'function': {'name': 'web_inspect', 'arguments': json.dumps({'source_index': source_index})}}]})
+                messages.append({'role': 'tool', 'tool_call_id': inspect_id, 'content': json.dumps(inspected, ensure_ascii=False)})
+        if required_result_save and status == 'complete':
+            request_definitions = [tools.SPECS['memory_save_result']]
+            allowed = {'memory_save_result'}
+        elif required_result_save:
+            required_result_save = False
+            metadata['tool_result_save_required'] = False
+    skip_planner = bool(direct_save or direct_forget or direct_calculation or (direct_web and not required_result_save))
+    for round_number in range(0 if skip_planner else round_limit):
         await check_budget(messages, metadata, request_definitions)
         planning_started = time.monotonic()
         response = await client.post("/v1/chat/completions", json={
             "model": model, "messages": messages, "tools": request_definitions,
-            "tool_choice": "required" if required_save else "auto",
+            "tool_choice": "required" if required_save or required_result_save else "auto",
             "parallel_tool_calls": False, "stream": False, "temperature": 0,
             "max_tokens": 512 + planner_budget, "chat_template_kwargs": {"enable_thinking": planner_thinking},
             "reasoning_budget_tokens": planner_budget, "reasoning_format": "deepseek", "cache_prompt": True})
@@ -148,13 +193,18 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                 args = json.loads(raw)
                 result = await session.execute(name, args)
                 status = "complete"
-                may_continue |= name in {"memory_search", "document_search"}
+                may_continue |= name in {"memory_search", "document_search", "document_read", "document_overview", "web_search", "web_inspect"}
             except (ValueError, TypeError, KeyError, SyntaxError, ArithmeticError, httpx.HTTPError) as error:
                 detail = str(error) if isinstance(error, tools.ToolValidationError) else "Tool failed validation or is unavailable. Do not claim it succeeded. Ask for missing details or retry with valid arguments."
                 result = {"error": detail}
                 status = "failed"
                 may_continue = True
-            execution_seconds += time.monotonic() - execution_started
+            elapsed = time.monotonic() - execution_started
+            execution_seconds += elapsed
+            if name in {"memory_search", "document_search", "document_read", "document_overview", "web_search", "web_inspect"}:
+                retrieval_seconds += elapsed
+            else:
+                action_seconds += elapsed
             result_event = {**event, "status": status}
             if status == "failed": result_event["detail"] = result["error"]
             if isinstance(result, dict) and "key" in result: result_event["memory_key"] = result["key"]
@@ -168,7 +218,10 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     metadata["tool_seconds"] = round(time.monotonic() - started, 3)
     metadata["tool_model_seconds"] = round(planning_seconds, 3)
     metadata["tool_execution_seconds"] = round(execution_seconds, 3)
+    metadata["retrieval_seconds"] = round(retrieval_seconds, 3)
+    metadata["action_tool_seconds"] = round(action_seconds, 3)
     metadata["tool_planning_rounds"] = rounds
+    metadata["agent_steps"] = list(session.events)
     metadata["tool_calls"] = session.events
     metadata["memory_changes"] = [{"action": m["action"], "key": m["key"]} for m in session.mutations]
     metadata["web_sources"] = session.web_sources

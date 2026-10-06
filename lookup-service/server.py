@@ -170,13 +170,55 @@ def relevant_excerpt(text, query, limit=1200):
     return excerpt[:limit]
 
 
-def fact_signals(text):
+VALUE_PATTERN = re.compile(
+    r"\b(?:\d{1,2}\s*[-–:]\s*\d{1,2}|"
+    r"\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[a-z]*\s+20\d{2}|"
+    r"20\d{2}[-/]\d{1,2}[-/]\d{1,2}|"
+    r"(?:[$€£]\s*)?\d+(?:[.,]\d+)?\s*(?:%|million|billion|thousand|km|kg|m|cm|mm|points?|goals?|votes?|users?|people)?)\b",
+    re.I,
+)
+
+
+def claim_signals(text, query):
+    query_words = {w for w in re.findall(r"\w+", query.casefold()) if len(w) > 2}
+    claims = []
+    for sentence in re.split(r"(?<=[.!?])\s+", " ".join(text.split()))[:300]:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        words = set(re.findall(r"\w+", sentence.casefold()))
+        if query_words and not (query_words & words):
+            continue
+        values = [m.group(0).strip() for m in VALUE_PATTERN.finditer(sentence)]
+        if values:
+            template = VALUE_PATTERN.sub("<value>", sentence.casefold())
+            template = re.sub(r"[^a-z0-9<> ]+", " ", template)
+            template = re.sub(r"\s+", " ", template).strip()[:180]
+            if 4 <= len(template.split()) <= 32:
+                claims.append({"kind": "numeric", "key": template,
+                               "value": " | ".join(values)[:160], "raw": sentence[:220]})
+        for match in re.finditer(r"(?i)\b([a-z][a-z0-9 /_-]{2,50}?)\s*[:=]\s*([^.;]{1,90})", sentence):
+            label = re.sub(r"\s+", " ", match.group(1).casefold()).strip()
+            value = re.sub(r"\s+", " ", match.group(2)).strip()
+            if query_words and not (query_words & set(re.findall(r"\w+", label))):
+                continue
+            claims.append({"kind": "labeled", "key": "label:" + label[:80],
+                           "value": value[:160], "raw": sentence[:220]})
+        if len(claims) >= 16:
+            break
+    unique = {}
+    for claim in claims:
+        unique[(claim["kind"], claim["key"], normalize_fact(claim["value"]))] = claim
+    return list(unique.values())[:16]
+
+
+def fact_signals(text, query=""):
     compact = " ".join(text.split())
     scores = sorted(set(re.findall(r"\b\d{1,2}\s*[-–:]\s*\d{1,2}\b", compact)))[:8]
     dates = sorted(set(
         re.findall(r"\b(?:\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[a-z]*\s+20\d{2}|20\d{2}[-/]\d{1,2}[-/]\d{1,2})\b", compact, re.I)
     ))[:8]
-    return {"scores": scores, "dates": dates}
+    return {"scores": scores, "dates": dates, "claims": claim_signals(compact, query)}
 
 
 async def fetch_page(url, query):
@@ -200,7 +242,7 @@ async def fetch_page(url, query):
                 chunks.append(chunk)
         text = visible_text(b"".join(chunks))
         result = {"fetched": bool(text), "excerpt": relevant_excerpt(text, query),
-                  "facts": fact_signals(text), "content_type": content_type[:100], "cache_hit": False}
+                  "facts": fact_signals(text, query), "content_type": content_type[:100], "cache_hit": False}
         cache_put(app.state.page_cache, url, result, 128)
         return result
     except httpx.HTTPError:
@@ -213,16 +255,66 @@ def normalize_fact(value):
 
 def verification(pages):
     fetched = [p for p in pages if p.get("page", {}).get("fetched")]
-    score_sets = [{normalize_fact(v) for v in p["page"]["facts"].get("scores", [])} for p in fetched]
-    date_sets = [{normalize_fact(v) for v in p["page"]["facts"].get("dates", [])} for p in fetched]
-    score_agreement = sorted(set.intersection(*score_sets)) if len(score_sets) >= 2 and all(score_sets) else []
-    date_agreement = sorted(set.intersection(*date_sets)) if len(date_sets) >= 2 and all(date_sets) else []
-    score_conflict = len(score_sets) >= 2 and all(score_sets) and not score_agreement
-    date_conflict = len(date_sets) >= 2 and all(date_sets) and not date_agreement
-    verified = len(fetched) >= 2 and bool(score_agreement or date_agreement)
-    return {"status": "verified" if verified else "conflicting" if score_conflict or date_conflict else "reviewed" if fetched else "snippet_only",
-            "verified_from": 2 if verified else 0, "conflict": bool(score_conflict or date_conflict),
-            "agreements": {"scores": score_agreement, "dates": date_agreement},
+
+    def consensus(values_by_source):
+        counts = {}
+        sources_with_values = 0
+        for values in values_by_source:
+            normalized = {normalize_fact(v) for v in values if v}
+            if normalized:
+                sources_with_values += 1
+            for value in normalized:
+                counts[value] = counts.get(value, 0) + 1
+        agreed = sorted(value for value, count in counts.items() if count >= 2)
+        distinct = len(counts)
+        resolved = len(fetched) >= 3 and bool(agreed)
+        conflict = sources_with_values >= 2 and distinct > 1 and not resolved
+        return agreed, conflict, resolved
+
+    score_agreement, score_conflict, score_resolved = consensus(
+        [p["page"]["facts"].get("scores", []) for p in fetched])
+    date_agreement, date_conflict, date_resolved = consensus(
+        [p["page"]["facts"].get("dates", []) for p in fetched])
+
+    claims_by_key = {}
+    for source_index, page in enumerate(fetched):
+        for claim in page["page"]["facts"].get("claims", []):
+            if not isinstance(claim, dict) or not claim.get("key"):
+                continue
+            entry = claims_by_key.setdefault(str(claim["key"]), {})
+            normalized = normalize_fact(str(claim.get("value", "")))
+            if normalized:
+                entry.setdefault(normalized, {"value": claim.get("value", ""), "sources": [], "examples": []})
+                entry[normalized]["sources"].append(source_index + 1)
+                if len(entry[normalized]["examples"]) < 2:
+                    entry[normalized]["examples"].append(str(claim.get("raw", ""))[:220])
+    claim_agreements, claim_conflicts, resolved_claims = [], [], []
+    for key, variants in claims_by_key.items():
+        source_union = set(index for item in variants.values() for index in item["sources"])
+        if len(source_union) < 2:
+            continue
+        majority = [item for item in variants.values() if len(set(item["sources"])) >= 2]
+        if len(variants) == 1:
+            value = next(iter(variants.values()))
+            claim_agreements.append({"key": key, "value": value["value"], "sources": sorted(set(value["sources"]))})
+        elif len(fetched) >= 3 and majority:
+            winner = sorted(majority, key=lambda item: len(set(item["sources"])), reverse=True)[0]
+            resolved_claims.append({"key": key, "value": winner["value"], "sources": sorted(set(winner["sources"]))})
+            claim_agreements.append({"key": key, "value": winner["value"], "sources": sorted(set(winner["sources"]))})
+        else:
+            claim_conflicts.append({"key": key, "variants": [
+                {"value": item["value"], "sources": sorted(set(item["sources"])), "examples": item["examples"]}
+                for item in variants.values()]})
+    claim_agreements = claim_agreements[:8]
+    claim_conflicts = claim_conflicts[:8]
+    resolved_claims = resolved_claims[:8]
+    conflict = bool(score_conflict or date_conflict or claim_conflicts)
+    verified = len(fetched) >= 2 and bool(score_agreement or date_agreement or claim_agreements)
+    resolved_any = bool(score_resolved or date_resolved or resolved_claims)
+    status = "verified_after_conflict" if verified and resolved_any and not conflict else "verified" if verified and not conflict else "conflicting" if conflict else "reviewed" if fetched else "snippet_only"
+    return {"status": status, "verified_from": 2 if verified and not conflict else 0, "conflict": conflict,
+            "agreements": {"scores": score_agreement, "dates": date_agreement, "claims": claim_agreements},
+            "claim_conflicts": claim_conflicts, "resolved_conflicts": resolved_claims,
             "fetched_pages": len(fetched)}
 
 
