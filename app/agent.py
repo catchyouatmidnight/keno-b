@@ -23,8 +23,10 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     metadata["tool_save_required"] = required_save
     started, count = time.monotonic(), 0
     planning_seconds, execution_seconds, rounds = 0.0, 0.0, 0
-    direct_save = tools.explicit_name_save(session.value.message) if required_save else None
-    metadata['tool_planning_mode'] = 'explicit_name_save' if direct_save else 'model'
+    name_save = tools.explicit_name_save(session.value.message) if required_save else None
+    direct_save = name_save or (tools.explicit_field_save(session.value.message) if required_save else None)
+    direct_calculation = tools.explicit_calculation(session.value.message) if "calculator" in allowed and metadata.get("route", {}).get("tool_policy") == "explicit_calculation" else None
+    metadata['tool_planning_mode'] = 'explicit_name_save' if name_save else 'explicit_field_save' if direct_save else 'explicit_calculation' if direct_calculation else 'model'
     planner_thinking = bool(metadata.get('route', {}).get('thinking', False)) and not required_save
     planner_budget = metadata.get('thinking_budget', 0) if planner_thinking else 0
     metadata['tool_thinking_budget'] = planner_budget
@@ -38,7 +40,17 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
         event = {**event, 'status': 'complete', 'memory_key': result['key']}
         session.events.append(event)
         yield 'tool', event
-    for round_number in range(0 if direct_save else tools.MAX_ROUNDS):
+    if direct_calculation:
+        event = {'name': 'calculator', 'status': 'running', 'index': 1}
+        yield 'tool', event
+        execution_started = time.monotonic()
+        result = await session.execute('calculator', direct_calculation)
+        execution_seconds = time.monotonic() - execution_started
+        event = {**event, 'status': 'complete'}
+        session.events.append(event)
+        metadata['_calculation_reply'] = f"{result['expression']} = {result['result']}."
+        yield 'tool', event
+    for round_number in range(0 if direct_save or direct_calculation else tools.MAX_ROUNDS):
         await check_budget(messages, metadata, request_definitions)
         planning_started = time.monotonic()
         response = await client.post("/v1/chat/completions", json={

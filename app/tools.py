@@ -36,6 +36,41 @@ def explicit_name_save(text):
     return {'key': 'user.name', 'quote': match.group('quote').rstrip(), 'category': 'fact'}
 
 
+FIELD_FACT = re.compile(r"my (?P<field>[A-Za-z][A-Za-z ]{0,59}?) is (?P<value>[^.!?;\n]{1,300})[.!]?", re.I)
+
+
+def field_fact(text):
+    match = FIELD_FACT.fullmatch(text.strip())
+    if not match or len(match['field'].split()) > 6 or re.search(r"\b(?:and|then|but|or)\b", match['field'] + ' ' + match['value'], re.I):
+        return None
+    field = ' '.join(match['field'].casefold().split())
+    if field in {'name', 'creator'} or not match['value'].strip():
+        return None
+    return field, match['value'].strip()
+
+
+def explicit_field_save(text):
+    if NO_SAVE.search(text) or FORGET_REQUEST.search(text):
+        return None
+    match = re.fullmatch(r"(?:please\s+)?(?:remember|save)\s+(?:that\s+)?(?P<quote>my .{1,370})", text.strip(), re.I)
+    fact = field_fact(match['quote']) if match else None
+    if not fact:
+        return None
+    return {'key': 'user.fact.' + fact[0].replace(' ', '_'), 'quote': match['quote'].rstrip('.!'), 'category': 'fact'}
+
+
+def explicit_calculation(text):
+    match = re.fullmatch(r"\s*(?:please\s+)?calculate\s+([0-9\s.+*/()%−×÷-]{1,200})\s*[?]?", text, re.I)
+    if not match:
+        return None
+    expression = match[1].strip().replace('×', '*').replace('÷', '/').replace('−', '-')
+    try:
+        calculate(expression)
+    except (ValueError, SyntaxError, ArithmeticError):
+        return None
+    return {'expression': expression}
+
+
 class ToolValidationError(ValueError):
     pass
 

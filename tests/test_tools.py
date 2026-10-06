@@ -47,7 +47,7 @@ def test_planner_reuse_cannot_claim_unsaved_memory_and_honors_deep_thinking(clie
     requests = []
     main.app.state.laya = fake_router(family='memory')
     main.app.state.llm = native_model(['Saved your name Zain.'], requests=requests)
-    response = send(client, new_conversation(client), message='Remember that my favorite color is blue.').json()
+    response = send(client, new_conversation(client), message='Remember that I prefer blue.').json()
     assert response['context']['answer_source'] == 'memory_guard'
     assert "hasn't been saved" in response['reply']
     assert client.get('/api/v1/memories').json() == []
@@ -404,7 +404,7 @@ def test_tool_completion_does_not_rewrite_system_prefix(client):
     requests=[]
     main.app.state.laya = fake_router(family='calculator')
     main.app.state.llm = native_model([[('calculator', {'expression':'2+2'})]], requests=requests)
-    response = send(client, new_conversation(client), message='Calculate 2+2').json()
+    response = send(client, new_conversation(client), message='What is 2+2?').json()
     assert response['context']['tool_calls'][0]['status'] == 'complete'
     payloads=[body for path,body in requests if path == '/v1/chat/completions']
     assert len(payloads) == 2
@@ -417,15 +417,15 @@ def test_explicit_save_requires_validated_tool_and_survives_new_chat(client):
     requests=[]
     main.app.state.laya = fake_router(family='memory')
     client.put('/api/v1/tools/settings', json={'automatic_memory':False})
-    main.app.state.llm = native_model([[('memory_save', {'key':'user.project', 'quote':'my project is Amira', 'category':'fact'})]], requests=requests)
-    saved = send(client, new_conversation(client), message='Remember that my project is Amira.').json()
+    main.app.state.llm = native_model([[('memory_save', {'key':'user.project', 'quote':'I work on project Amira', 'category':'fact'})]], requests=requests)
+    saved = send(client, new_conversation(client), message='Remember that I work on project Amira.').json()
     assert saved['context']['tool_save_required'] is True
     assert saved['context']['tool_calls'][0]['status'] == 'complete'
-    assert saved['reply'].startswith('Saved: my project is Amira')
+    assert saved['reply'].startswith('Saved: I work on project Amira')
     payload = next(body for path,body in requests if path == '/v1/chat/completions')
     assert payload['tool_choice'] == 'required'
     assert [d['function']['name'] for d in payload['tools']] == ['memory_save']
-    assert client.get('/api/v1/memories').json()[0]['content'] == 'my project is Amira'
+    assert client.get('/api/v1/memories').json()[0]['content'] == 'I work on project Amira'
 
 
 def test_required_save_preserves_quote_validation_and_other_tool_choices(client):
@@ -433,7 +433,7 @@ def test_required_save_preserves_quote_validation_and_other_tool_choices(client)
     main.app.state.laya = fake_router(family='memory')
     bad = [('memory_save', {'key':'user.name', 'quote':'Invented fact', 'category':'fact'})]
     main.app.state.llm = native_model([bad,bad], requests=requests)
-    result = send(client, new_conversation(client), message='Remember that my project is Amira.').json()
+    result = send(client, new_conversation(client), message='Remember that I work on project Amira.').json()
     assert all(event['status'] == 'failed' for event in result['context']['tool_calls'])
     assert client.get('/api/v1/memories').json() == []
     assert "hasn't been saved" in result['reply']
@@ -555,8 +555,44 @@ def test_firsthand_save_required_even_when_router_says_answer(client):
     main.app.state.llm = native_model([[('memory_save', {'key': 'user.marker', 'quote': 'my evaluation marker is sample123', 'category': 'fact'})]], requests=requests)
     result = send(client, new_conversation(client), message='Remember that my evaluation marker is sample123.').json()
     assert result['context']['route']['tool_policy'] == 'explicit_memory_command'
-    assert result['context']['memory_changes'] == [{'action': 'save', 'key': 'user.marker'}]
-    payload = next(body for path, body in requests if path == '/v1/chat/completions')
-    assert payload['tool_choice'] == 'required'
-    assert [d['function']['name'] for d in payload['tools']] == ['memory_save']
+    assert result['context']['memory_changes'] == [{'action': 'save', 'key': 'user.fact.evaluation_marker'}]
+    assert not any(path == '/v1/chat/completions' for path, _ in requests)
     assert 'sample123' in client.get('/api/v1/memories').json()[0]['content']
+
+
+def test_explicit_field_save_correct_recall_followup_no_inference(client):
+    main.app.state.laya = fake_router(family='none')
+    requests = []
+    main.app.state.llm = native_model([], requests=requests)
+    cid = new_conversation(client)
+    saved = send(client, cid, message='Remember that my evaluation marker is sample123.').json()
+    assert saved['context']['tool_planning_mode'] == 'explicit_field_save'
+    assert saved['context']['tool_planning_rounds'] == 0
+    assert client.get('/api/v1/memories').json()[0]['content'] == 'my evaluation marker is sample123'
+    new = new_conversation(client)
+    assert send(client, new, request_id='field-recall', message='What is my evaluation marker?').json()['reply'] == 'Your evaluation marker is sample123.'
+    assert send(client, new, request_id='field-followup', message='Tell me more.').json()['reply'] == 'Your evaluation marker is sample123.'
+    send(client, cid, request_id='field-correction', message='Remember that my evaluation marker is updated456.')
+    assert len(client.get('/api/v1/memories').json()) == 1
+    assert send(client, new_conversation(client), request_id='field-corrected-recall', message='What is my evaluation marker?').json()['reply'] == 'Your evaluation marker is updated456.'
+    assert not any(path == '/v1/chat/completions' for path, _ in requests)
+
+
+def test_explicit_calculation_executes_without_model_even_on_answer_route(client):
+    main.app.state.laya = fake_router(family='none')
+    requests = []
+    main.app.state.llm = native_model([], requests=requests)
+    result = send(client, new_conversation(client), message='Calculate 17 × 23').json()
+    assert result['reply'] == '17 * 23 = 391.'
+    assert result['context']['answer_source'] == 'calculator_tool'
+    assert result['context']['tool_calls'][0]['name'] == 'calculator'
+    assert result['context']['tool_calls'][0]['status'] == 'complete'
+    assert result['context']['tool_planning_rounds'] == 0
+    assert not any(path == '/v1/chat/completions' for path, _ in requests)
+
+
+def test_direct_field_parser_does_not_consume_mixed_or_untrusted_text():
+    from app import tools
+    for text in ['Remember that my project is Keno and calculate 2+2.', 'Remember that my project is Keno. Explain it.', 'Do not remember that my project is Keno.', 'Remember that my name is Zain.', 'Remember that my project is   .']:
+        assert tools.explicit_field_save(text) is None
+    assert tools.explicit_calculation("Calculate __import__('os').getcwd()") is None

@@ -646,6 +646,26 @@ def user_name_reply(value, messages, attachments):
     return f"Your name is {name}."
 
 
+def saved_field_reply(value, messages, attachments):
+    if attachments:
+        return None
+    query = value.message.strip()
+    if re.fullmatch(r"(?:tell me more|continue)[.!?]*", query, re.I):
+        prior = [m['content'] for m in messages[:-1] if m['role'] == 'user' and isinstance(m['content'], str)]
+        query = prior[-1].strip() if prior else query
+    match = re.fullmatch(r"what(?: is|'s|s) my ([A-Za-z][A-Za-z ]{0,59})[?]?", query, re.I)
+    if not match:
+        return None
+    field = ' '.join(match[1].casefold().split())
+    key = 'user.fact.' + field.replace(' ', '_')
+    with db() as c:
+        row = c.execute("SELECT content FROM memories WHERE key=? AND (expires_at IS NULL OR expires_at>?)", (key, now())).fetchone()
+    fact = tools.field_fact(row[0]) if row else None
+    if fact and fact[0] == field:
+        return f"Your {field} is {fact[1]}."
+    return None
+
+
 async def generate(value, messages, metadata, request_started=None, attachments=None):
     answer, finished, reason = "", False, None
     start = time.monotonic()
@@ -661,24 +681,28 @@ async def generate(value, messages, metadata, request_started=None, attachments=
         definitions = [tools.SPECS[name] for name in metadata.get("available_tools", [])]
         # This read-only answer uses verified user evidence/server state. Do not
         # ask a model to plan tools before returning an already-known name.
-        name_guarded = user_name_reply(value, messages, attachments)
+        field_guarded = saved_field_reply(value, messages, attachments)
+        name_guarded = user_name_reply(value, messages, attachments) or field_guarded
         if name_guarded is not None:
             metadata.update(tool_seconds=0.0, tool_model_seconds=0.0,
                             tool_execution_seconds=0.0, tool_planning_rounds=0,
-                            tool_planning_mode="user_name_guard", tool_save_required=False,
+                            tool_planning_mode="saved_field_guard" if field_guarded else "user_name_guard", tool_save_required=False,
                             tool_calls=[], memory_changes=[])
         elif definitions:
             async for name, data in agent.plan(app.state.llm, LLM_MODEL, messages, definitions, session, metadata, check_tool_budget):
                 yield name, data
         planner_reply = metadata.pop("_planner_reply", None)
-        guarded = tools.weather_reply(session, metadata)
+        calculation_guarded = metadata.pop("_calculation_reply", None)
+        guarded = calculation_guarded or tools.weather_reply(session, metadata)
         memory_guarded = tools.memory_reply(session, metadata) if guarded is None else None
         if memory_guarded is not None: guarded = memory_guarded
         if guarded is not None: name_guarded = None
         if name_guarded is not None: guarded = name_guarded
         if guarded is not None:
             answer, finished, reason = guarded, True, "stop"
-            metadata["answer_source"] = ("user_name_guard" if name_guarded is not None else
+            metadata["answer_source"] = ("saved_field_guard" if field_guarded is not None and name_guarded is not None else
+                                        "user_name_guard" if name_guarded is not None else
+                                        "calculator_tool" if calculation_guarded is not None else
                                         "memory_guard" if memory_guarded is not None else
                                         "weather_tool" if session.weather_results else "weather_guard")
             metadata["first_token_seconds"] = round(time.monotonic() - request_started, 3)
@@ -807,6 +831,8 @@ async def chat(value: ChatInput):
         if not attachments and not tools.NO_SAVE.search(value.message) and not tools.FORGET_REQUEST.search(value.message):
             if tools.FIRSTHAND_SAVE.search(value.message.strip()) or tools.FOLLOWUP_SAVE.fullmatch(value.message.strip()):
                 route.update(tool_family="memory", tool_policy="explicit_memory_command", thinking=False, effort_policy="explicit_save_quick")
+        if not attachments and tools.explicit_calculation(value.message):
+            route.update(tool_family="calculator", tool_policy="explicit_calculation", thinking=False, effort_policy="explicit_calculation_quick")
         messages, metadata = await fit_context(value, route, attachments)
         metadata["context_prepare_seconds"] = round(time.monotonic() - prepare_started, 3)
         with db() as c:
