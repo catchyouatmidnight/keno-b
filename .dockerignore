@@ -9,3 +9,6 @@ __pycache__
 tests
 
 **/node_modules
+
+web/dist
+web/*.tsbuildinfo

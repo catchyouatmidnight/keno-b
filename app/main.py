@@ -87,6 +87,7 @@ class ChatInput(StrictModel):
     stream: bool = False
     max_tokens: int = Field(default=512, ge=32, le=3072)
     attachment_ids: list[str] | None = Field(default=None, max_length=4)
+    library_document_ids: list[str] = Field(default_factory=list, max_length=4)
 
 
 class AttachmentInput(StrictModel):
@@ -218,12 +219,18 @@ async def headers_and_limits(request: Request, call_next):
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     return response
 
 
 @app.get("/")
 def index():
+    lab_index = STATIC.parent / "lab-static" / "index.html"
+    return FileResponse(lab_index if lab_index.exists() else STATIC / "index.html")
+
+
+@app.get("/legacy")
+def legacy_console():
     return FileResponse(STATIC / "index.html")
 
 
@@ -544,7 +551,8 @@ async def fit_context(value, route=None, attachments=None):
                               "document_evidence_characters": sum(len(e["text"]) for e in excerpts),
                               "context_policy": policy["mode"], "reply_language": reply_language, "followup_context": followup, "history_summary": bool(older["compact_notes"]), "retrieved_history": len(older["relevant_older_excerpts"]),
                               "attachment_ids": [a["id"] for a in attachments],
-                              "document_sources": [{k: c[k] for k in ("attachment_id", "name", "page", "chunk")} for c in excerpts],
+                              "document_sources": [{**{k: c[k] for k in ("attachment_id", "name", "page", "chunk")},
+                                  **({"library_document_id": c["attachment_id"][4:]} if c["attachment_id"].startswith("lib:") else {})} for c in excerpts],
                               "visual_sources": visual_sources, "document_coverage": "selected excerpts/pages" if attachments else "none",
                               "document_coverage_details": documents.coverage(attachments, excerpts)}
         if recent:
@@ -840,6 +848,10 @@ async def chat(value: ChatInput):
     try:
         prepare_started = time.monotonic()
         attachments = attachment_rows(value.conversation_id, value.attachment_ids)
+        if value.library_document_ids:
+            attachments += library.chat_attachments(value.library_document_ids)
+            if len(attachments) > 4:
+                raise HTTPException(422, "Select up to four combined chat/library files")
         with db() as c:
             prior = c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY created_at DESC LIMIT 2", (value.conversation_id,)).fetchall()
         history = "\n".join(str(t[0])[:300] for t in reversed(prior))
@@ -913,3 +925,8 @@ def backup():
 
 from . import library
 app.include_router(library.router, dependencies=[Depends(authenticate)])
+from . import lab
+app.include_router(lab.router, dependencies=[Depends(authenticate)])
+lab_static = STATIC.parent / "lab-static"
+if lab_static.exists():
+    app.mount("/lab-assets", StaticFiles(directory=lab_static), name="lab-assets")

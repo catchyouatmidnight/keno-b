@@ -96,7 +96,42 @@ def records(key,ids=None):
 
 
 def public(record):
-    return {k:record[k] for k in ('id','name','version','checksum','format','category','topic','warnings','classification','embedding_model')}|{'passages':len(record['chunks'])}
+    return {k:record[k] for k in ('id','name','version','checksum','format','category','topic','warnings','classification','embedding_model')}|{'passages':len(record['chunks']),
+        'source_bytes':record.get('source_bytes'),'section_count':record.get('section_count'),
+        'indexing_seconds':record.get('indexing_seconds'),'imported_at':record.get('imported_at')}
+
+
+def chat_attachments(ids):
+    """Decrypt evidence in memory; never copy library plaintext to attachments."""
+    key=document_key();result=[]
+    for r in records(key,ids):
+        pdf=r['format']=='pdf'
+        sections=[{'text':chunk['text'],'page':int(re.search(r'page (\d+)',chunk['locator']).group(1)) if pdf and re.search(r'page (\d+)',chunk['locator']) else None} for chunk in r['chunks']]
+        raw=b''
+        if pdf:
+            with main().db() as c:row=c.execute('SELECT payload FROM vault_originals WHERE id=?',(r['id'],)).fetchone()
+            if row:raw=unseal(key,row[0],'original:'+r['id'])
+        result.append({'id':'lib:'+r['id'],'name':r['name'],'kind':'pdf' if pdf else 'text',
+            'pages':max((s['page'] or 0 for s in sections),default=0),'characters':sum(len(s['text']) for s in sections),'sections':sections,'raw':raw})
+    document_key()
+    return result
+
+
+@router.get('/documents/{document_id}/passages/{index}')
+def passage(document_id:str,index:int):
+    record=records(document_key(),[document_id])[0]
+    if not 1<=index<=len(record['chunks']):raise HTTPException(404,'Passage not found')
+    return {'document_id':record['id'],'name':record['name'],'index':index,**record['chunks'][index-1]}
+
+
+@router.get('/documents/{document_id}/pages/{page}')
+def preview_page(document_id:str,page:int):
+    key=document_key();record=records(key,[document_id])[0]
+    if record['format']!='pdf':raise HTTPException(422,'Page preview is available for PDFs only')
+    with main().db() as c:row=c.execute('SELECT payload FROM vault_originals WHERE id=?',(document_id,)).fetchone()
+    if not row:raise HTTPException(404,'Original unavailable')
+    raw=unseal(key,row[0],'original:'+document_id)
+    return Response(documents.page_jpeg(raw,page),media_type='image/jpeg')
 
 
 @router.get('/documents')
@@ -124,6 +159,7 @@ async def embed(texts,kind):
 
 @router.post('/documents')
 async def import_document(value:Import):
+    started=time.monotonic()
     key=document_key()
     if main().app.state.generation_lock.locked():raise HTTPException(409,'Wait for the active operation')
     async with main().app.state.generation_lock:
@@ -142,6 +178,8 @@ async def import_document(value:Import):
         if total>2000:raise HTTPException(422,'Vault limit: 2,000 passages; remove documents or use a separate instance')
         vectors=await embed([c['text'] for c in extracted['chunks']],'passage') if value.embed else None
         record={**extracted,'id':previous['id'] if previous else str(uuid.uuid4()),'name':name,'checksum':checksum,'version':previous['version']+1 if previous else 1,'vectors':vectors,'embedding_model':MODEL if vectors else None}
+        record.update(source_bytes=len(raw),section_count=len({c['locator'] for c in extracted['chunks']}),
+                      indexing_seconds=round(time.monotonic()-started,3),imported_at=main().now())
         encrypted=seal(key,json.dumps(record,ensure_ascii=False).encode(),'document:'+record['id'])
         original=seal(key,raw,'original:'+record['id'])
         document_key()
@@ -193,7 +231,10 @@ async def retrieve(key,value,overview=False):
                 if n<count:indices.append(available[round(n*(len(available)-1)/max(1,count-1))])
     indices=list(dict.fromkeys(indices+ranked))[:12 if overview else 8]
     excerpts=[{k:v for k,v in candidates[i].items() if k!='vector'} for i in indices]
-    for i,c in enumerate(excerpts,1):c['source_id']='S'+str(i)
+    for rank,c in enumerate(excerpts,1):
+        i=indices[rank-1];c['source_id']='S'+str(rank)
+        c.update(keyword_matches=matches[i],cosine_similarity=sum(a*b for a,b in zip(query,candidates[i]['vector'])) if query else None,
+                 fusion_score=scores.get(i,0),score_type='reciprocal rank fusion (k=60)',rank=rank)
     coverage=[{'document_id':r['id'],'name':r['name'],'warnings':r['warnings'],'total_passages':len(r['chunks']),'supplied_passages':sum(c['document_id']==r['id'] for c in excerpts)} for r in docs]
     return excerpts,coverage
 

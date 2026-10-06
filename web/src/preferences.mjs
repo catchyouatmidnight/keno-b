@@ -1,0 +1,1 @@
+export function preferences(){try{const p=JSON.parse(localStorage.getItem('keno.lab.preferences')||'{}');return {repetitions:Math.max(1,Math.min(20,Number(p.repetitions)||2)),timeout:Math.max(10,Math.min(360,Number(p.timeout)||180))};}catch{return {repetitions:2,timeout:180};}}
