@@ -274,7 +274,7 @@ def test_web_search_executes_explicit_requests_and_clarified_followups(client, m
     assert second['context']['available_tools'] == ['web_search']
     assert second['context']['tool_planning_rounds'] == 0
     assert second['context']['tool_calls'] == [{'name': 'web_search', 'status': 'complete', 'index': 1}]
-    assert len(second['context']['web_sources']) == 3
+    assert len(second['context']['web_sources']) == 2
     assert second['context']['web_sources'][0]['url'] == 'https://example.com/match-0'
     assert second['context']['route']['call_count'] == 0
     assert second['context']['route']['thinking'] is False
@@ -288,7 +288,7 @@ def test_web_search_executes_explicit_requests_and_clarified_followups(client, m
     assert outbound == [('/search', {'query': refined_query})]
     assert clarified['context']['route']['tool_policy'] == 'web_search_followup'
     assert clarified['context']['context_policy'] == 'followup'
-    assert clarified['context']['history_turns'] >= 2
+    assert clarified['context']['history_turns'] == 1
 
     outbound.clear()
     main.app.state.llm = fake_model(calls=calls, chunks=['The date correction is grounded in fresh results.'])

@@ -335,16 +335,16 @@ class ToolSession:
             else:
                 if not isinstance(result.get("results"), list): raise ToolValidationError("Invalid web search result")
                 compact = []
-                for row in result["results"][:3]:
+                for row in result["results"][:2]:
                     if not isinstance(row, dict): continue
                     compact.append({"title": str(row.get("title", ""))[:160],
                                     "url": str(row.get("url", ""))[:2000],
-                                    "snippet": str(row.get("snippet", ""))[:420]})
+                                    "snippet": str(row.get("snippet", ""))[:300]})
                 result = {**result, "results": compact}
                 urls = {row["url"] for row in compact if row["url"]}
                 result["sources"] = [source for source in result.get("sources", [])
-                                     if isinstance(source, dict) and source.get("url") in urls][:3]
-                result["coverage"] = "up to three search snippets only; linked pages were not fetched or verified"
+                                     if isinstance(source, dict) and source.get("url") in urls][:2]
+                result["coverage"] = "up to two search snippets only; linked pages were not fetched or verified"
                 self.search_results.append({"query": text, "result": result})
             self.web_sources.extend(result.get("sources", []))
             return result

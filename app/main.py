@@ -537,6 +537,10 @@ async def fit_context(value, route=None, attachments=None):
     with db() as c:
         prior_requests=[r[0] for r in c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 4",(value.conversation_id,))]
         policy=context_policy.plan(value.message,prior_requests,bool(attachments))
+        if route.get("tool_policy") == "explicit_web_search":
+            policy={"mode": "web_search", "recent_limit": 0, "older": False}
+        elif route.get("tool_policy") == "web_search_followup":
+            policy={"mode": "followup", "recent_limit": 1, "older": False}
         if direct_document:
             policy={"mode": "document_evidence", "recent_limit": 1 if followup else 0, "older": False}
         reply_language=history.reply_language(c,value.conversation_id,value.message)
@@ -793,8 +797,9 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                                 tool_planning_rounds=0, tool_planning_mode="direct_evidence")
             model_started = time.monotonic()
             web_answer = metadata.get("route", {}).get("tool_policy") in {"explicit_web_search", "web_search_followup"}
+            answer_tokens = min(value.max_tokens, 384) if web_answer else value.max_tokens
             payload = {"model": LLM_MODEL, "messages": messages, "stream": True,
-                       "temperature": 0.2 if web_answer else 0.6, "max_tokens": value.max_tokens + metadata.get("thinking_budget", 0),
+                       "temperature": 0.2 if web_answer else 0.6, "max_tokens": answer_tokens + metadata.get("thinking_budget", 0),
                        "chat_template_kwargs": {"enable_thinking": metadata.get("route", {}).get("thinking", False)},
                        "reasoning_format": "deepseek", "reasoning_budget_tokens": metadata.get("thinking_budget", 0),
                        "cache_prompt": True}
