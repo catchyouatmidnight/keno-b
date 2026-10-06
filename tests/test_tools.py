@@ -181,7 +181,9 @@ def test_history_compaction_retrieval_backup_and_delete(client,tmp_path):
         result=send(client,conversation,request_id=f'history-turn-{index:04}',message='Orchid plan' if index==0 else 'Hi').json()
     assert result['context']['history_turns']<=4
     with main.db() as c:
-        recent,notes=history.context(c,conversation,'Orchid')
+        recent,single=history.context(c,conversation,'Orchid')
+        assert not single['relevant_older_excerpts'], 'A single generic term must not retrieve unrelated older history'
+        recent,notes=history.context(c,conversation,'Orchid plan')
     assert len(recent)==4
     assert any('Orchid' in r['user_excerpt'] for r in notes['relevant_older_excerpts'])
     backup=tmp_path/'backup.db';backup.write_bytes(client.get('/api/v1/backup').content)
@@ -337,8 +339,9 @@ def test_memory_capability_reports_real_settings_and_identity_prompt(client):
     response=send(client,new_conversation(client),message='can you remember me in future chats?').json()
     assert 'persist across chats' in response['reply'] and 'Automatic memory is off' in response['reply']
     prompt=main.system_prompt([])
-    assert 'persistent SQLite memory across chats' in prompt
-    assert 'explicit save requests still work' in prompt and 'creator of this Keno app' in prompt
+    assert 'The USER is a different person' in prompt
+    assert 'Use user evidence for identity; admit when unknown' in prompt
+    assert 'only successful saves persist' in main.system_prompt([],available_tools=['memory_save'])
     assert client.get('/api/v1/status').json()['version']=='0.3.2'
 
 
@@ -395,14 +398,14 @@ def test_changing_retrieval_preserves_instruction_and_history_prefix(client):
     seen=[];main.app.state.llm = fake_model(seen=seen)
     conversation = new_conversation(client)
     send(client, conversation, message='Hello')
-    client.put('/api/v1/memories/preference', json={'key':'preference', 'content':'Prefer short replies', 'pinned':True})
-    send(client, conversation, request_id='prefix-second-001', message='Another question')
+    client.put('/api/v1/memories/preference', json={'key':'preference', 'content':'Prefer short replies', 'pinned':True,'category':'preference'})
+    send(client, conversation, request_id='prefix-second-001', message='Tell me more')
     first, second = seen[0], seen[-1]
     assert first[0] == second[0]
     assert second[1]['role'] == 'user' and second[1]['content'] == 'Hello'
     assert second[2]['role'] == 'assistant'
     assert second[3]['role'] == 'user' and 'Prefer short replies' in second[3]['content']
-    assert second[3]['content'].startswith('Another question')
+    assert second[3]['content'].startswith('Tell me more')
     assert 'Prefer short replies' not in second[0]['content']
 
 
@@ -509,9 +512,8 @@ def test_answer_only_gate_skips_false_multiple_planner_and_streams(client):
     payloads=[body for path,body in requests if path == '/v1/chat/completions']
     assert len(payloads) == 1 and payloads[0]['stream'] is True
     assert 'tools' not in payloads[0]
-    assert "Never preface unrelated answers with the user's name" in payloads[0]['messages'][0]['content']
-    assert 'Start with the first useful step or fact.' in payloads[0]['messages'][0]['content']
-    assert 'Do not restate the question' in payloads[0]['messages'][0]['content']
+    assert 'No repeated question, stock opening, closing, or unrelated personal facts' in payloads[0]['messages'][0]['content']
+    assert 'Answer the current request directly' in payloads[0]['messages'][0]['content']
 
 
 def test_action_gate_keeps_calculator_available(client):
