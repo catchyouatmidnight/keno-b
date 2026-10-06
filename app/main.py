@@ -22,7 +22,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from . import documents, routing, tools, history, agent, response_style, context_policy
+from . import documents, routing, tools, history, agent, response_style, context_policy, calendar_tools
 
 VERSION = "0.3.2"
 DB_PATH = Path(os.environ.get("KENO_DB", "data/keno.db"))
@@ -701,7 +701,10 @@ async def generate(value, messages, metadata, request_started=None, attachments=
         # ask a model to plan tools before returning an already-known name.
         field_guarded = saved_field_reply(value, messages, attachments)
         name_guarded = user_name_reply(value, messages, attachments) or field_guarded
-        if name_guarded is not None:
+        calendar_guarded=metadata.pop("_calendar_reply",None)
+        if calendar_guarded is not None:
+            metadata.update(tool_seconds=0.0, tool_model_seconds=0.0, tool_execution_seconds=0.0, tool_planning_rounds=0, tool_planning_mode="local_calendar", tool_calls=[], memory_changes=[])
+        elif name_guarded is not None:
             metadata.update(tool_seconds=0.0, tool_model_seconds=0.0,
                             tool_execution_seconds=0.0, tool_planning_rounds=0,
                             tool_planning_mode="saved_field_guard" if field_guarded else "user_name_guard", tool_save_required=False,
@@ -711,14 +714,15 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                 yield name, data
         planner_reply = metadata.pop("_planner_reply", None)
         calculation_guarded = metadata.pop("_calculation_reply", None)
-        guarded = calculation_guarded or tools.weather_reply(session, metadata)
+        guarded = calendar_guarded or calculation_guarded or tools.weather_reply(session, metadata)
         memory_guarded = tools.memory_reply(session, metadata) if guarded is None else None
         if memory_guarded is not None: guarded = memory_guarded
         if guarded is not None: name_guarded = None
         if name_guarded is not None: guarded = name_guarded
         if guarded is not None:
             answer, finished, reason = guarded, True, "stop"
-            metadata["answer_source"] = ("saved_field_guard" if field_guarded is not None and name_guarded is not None else
+            metadata["answer_source"] = ("local_calendar" if calendar_guarded is not None else
+                                        "saved_field_guard" if field_guarded is not None and name_guarded is not None else
                                         "user_name_guard" if name_guarded is not None else
                                         "calculator_tool" if calculation_guarded is not None else
                                         "memory_guard" if memory_guarded is not None else
@@ -853,8 +857,9 @@ async def chat(value: ChatInput):
             if len(attachments) > 4:
                 raise HTTPException(422, "Select up to four combined chat/library files")
         with db() as c:
-            prior = c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY created_at DESC LIMIT 2", (value.conversation_id,)).fetchall()
+            prior = c.execute("SELECT user_text FROM turns WHERE conversation_id=? AND status='complete' ORDER BY rowid DESC LIMIT 2", (value.conversation_id,)).fetchall()
         history = "\n".join(str(t[0])[:300] for t in reversed(prior))
+        calendar_result = calendar_tools.calculate(value.message,[str(t[0]) for t in prior]) if not attachments else None
         route = await routing.decide(app.state.laya, value.message, history, attachments)
         # Explicit user actions outrank a probabilistic answer/action label.
         # Preserve the raw Laya decision so disagreements stay observable.
@@ -867,7 +872,12 @@ async def chat(value: ChatInput):
             route.update(tool_family="memory", tool_policy="natural_memory", thinking=False, effort_policy="natural_memory_quick")
         if not attachments and tools.explicit_calculation(value.message):
             route.update(tool_family="calculator", tool_policy="explicit_calculation", thinking=False, effort_policy="explicit_calculation_quick")
+        if calendar_result is not None:
+            route.update(tool_family="none",tool_policy="local_calendar",thinking=False,effort_policy="explicit_calculation_quick")
         messages, metadata = await fit_context(value, route, attachments)
+        if calendar_result is not None:
+            metadata["calendar_calculation"] = calendar_result
+            metadata["_calendar_reply"] = calendar_tools.render(calendar_result,metadata.get("reply_language"))
         metadata["context_prepare_seconds"] = round(time.monotonic() - prepare_started, 3)
         with db() as c:
             c.execute("INSERT INTO turns(request_id,conversation_id,user_text,status,created_at) VALUES (?,?,?,'running',?) ON CONFLICT(request_id) DO UPDATE SET status='running',assistant_text=NULL,metadata='{}'", (value.request_id, value.conversation_id, value.message, now()))

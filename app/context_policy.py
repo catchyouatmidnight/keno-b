@@ -2,7 +2,7 @@
 import re
 from .documents import QUERY_STOP_WORDS
 
-FOLLOWUP=re.compile(r'\s*(?:which is|who is that|who exactly|what about that|tell me more|expand on that|explain further|continue|repeat(?: that)?(?: again)?|say that again|make it shorter|shorter|translate that|rewrite that|in Indonesian|in English|yea switch|yeah switch|why|how so|yes|yeah|yea|yep|ok|okay|lanjut|ulangi|kenapa)\s*[?.!]*',re.I)
+FOLLOWUP=re.compile(r'\s*(?:do that|do it|calculate (?:it|that)|go ahead|yes please|hitung itu|lakukan itu|which is|who is that|who exactly|what about that|tell me more|expand on that|explain further|continue|repeat(?: that)?(?: again)?|say that again|make it shorter|shorter|translate that|rewrite that|in Indonesian|in English|yea switch|yeah switch|why|how so|yes|yeah|yea|yep|ok|okay|lanjut|ulangi|kenapa)\s*[?.!]*',re.I)
 ROUTINE=re.compile(r'\s*(?:hello|hi|hey|halo|hai|testing|test|how are (?:you|u)|apa kabar|thanks|thank you|terima kasih)\s*[?.!]*',re.I)
 FOLLOWUP_PREFIX=re.compile(r'^\s*(?:and|what about|how about|also|then|but|dan|kalau|lalu)\b',re.I)
 PAST=re.compile(r'\b(?:earlier|previously|last time|previous conversation|old chat|before|sebelumnya|tadi)\b',re.I)

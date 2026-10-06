@@ -31,3 +31,7 @@ node tests/browser-smoke.mjs
 ```
 
 The browser smoke test uses explicit API fixtures to verify UI contracts, not live model quality or speed. Python component checks cover backend lab persistence, context policies and document streaming. A real deployment should additionally verify authentication, encrypted imports, retrieval and live inference.
+
+## Calendar and short follow-ups
+
+Calendar countdowns use the server clock and Python date arithmetic without model planning or generation. A bare year means January 1 of that year; the response states the exact target and current date. Set `KENO_TIMEZONE=Asia/Jakarta` (or another IANA timezone) in `.env` and recreate the backend to use local calendar dates. The default is UTC. These read-only calculations need no internet. “Do that” and “do it” retain recent user context; calendar follow-ups resolve only the adjacent user request, never invented assistant facts.

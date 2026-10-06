@@ -16,6 +16,7 @@ policy=SimpleNamespace(**{k:scope[k] for k in ['plan','language_choice']})
 assert policy.plan('hello',['My name is Zain'])['recent_limit']==0
 assert policy.plan('how are u',['Project Orchid budget is 7402'])['older'] is False
 assert policy.plan('how long does it take to boil an egg',['My name is Zain'])['recent_limit']==0
+assert policy.plan('do that',['Please explain the plan'])['recent_limit']==4
 assert policy.plan('repeat that again',['What is my name?'])['recent_limit']==4
 assert policy.plan('What is the Orchid budget?',['Project Orchid budget is 7402'])['recent_limit']==2
 assert policy.plan('What did we discuss earlier?',[])['older'] is True
