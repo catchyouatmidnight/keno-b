@@ -34,6 +34,9 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     direct_web = metadata.get("route", {}).get("web_search_query") if "web_search" in allowed and metadata.get("route", {}).get("tool_policy") in {"explicit_web_search", "web_search_followup"} else None
     direct_web = direct_web if isinstance(direct_web, str) and direct_web.strip() else None
     metadata['tool_planning_mode'] = 'natural_memory' if natural else 'explicit_name_save' if name_save else 'explicit_field_save' if direct_save else 'explicit_calculation' if direct_calculation else 'explicit_web_search' if direct_web else 'model'
+    mode = metadata.get("execution_mode", metadata.get("route", {}).get("execution_mode", "balanced"))
+    round_limit = 1 if mode == "fast" else 4 if mode == "deep" else tools.MAX_ROUNDS
+    metadata["agent_step_limit"] = round_limit
     planner_thinking = bool(metadata.get('route', {}).get('thinking', False)) and not required_save and not direct_web
     planner_budget = metadata.get('thinking_budget', 0) if planner_thinking else 0
     metadata['tool_thinking_budget'] = planner_budget
@@ -90,7 +93,7 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                 'id': call_id, 'type': 'function',
                 'function': {'name': 'web_search', 'arguments': json.dumps(args, ensure_ascii=False)}}]})
             messages.append({'role': 'tool', 'tool_call_id': call_id, 'content': json.dumps(result, ensure_ascii=False)})
-    for round_number in range(0 if direct_save or direct_forget or direct_calculation or direct_web else tools.MAX_ROUNDS):
+    for round_number in range(0 if direct_save or direct_forget or direct_calculation or direct_web else round_limit):
         await check_budget(messages, metadata, request_definitions)
         planning_started = time.monotonic()
         response = await client.post("/v1/chat/completions", json={
@@ -169,6 +172,7 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     metadata["tool_calls"] = session.events
     metadata["memory_changes"] = [{"action": m["action"], "key": m["key"]} for m in session.mutations]
     metadata["web_sources"] = session.web_sources
+    metadata["web_verification"] = session.web_verification
     if session.sources:
         metadata["document_sources"] = list({(s["attachment_id"], s["page"], s["chunk"]): s for s in session.sources}.values())
         # Tool results now supply the document evidence; avoid sending it twice.

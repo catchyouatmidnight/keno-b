@@ -236,6 +236,7 @@ class ToolSession:
         self.mutations, self.events, self.sources, self.web_sources = [], [], [], []
         self.weather_results, self.weather_city = [], None
         self.search_results = []
+        self.web_verification = None
 
     def rows(self, query=""):
         with self.db() as c:
@@ -334,17 +335,27 @@ class ToolSession:
                 self.weather_results.append({"city": text, "result": result})
             else:
                 if not isinstance(result.get("results"), list): raise ToolValidationError("Invalid web search result")
+                verification = result.get("verification") if isinstance(result.get("verification"), dict) else {}
+                limit = 3 if verification.get("conflict") else 2
                 compact = []
-                for row in result["results"][:2]:
+                for row in result["results"][:limit]:
                     if not isinstance(row, dict): continue
+                    page = row.get("page") if isinstance(row.get("page"), dict) else {}
                     compact.append({"title": str(row.get("title", ""))[:160],
                                     "url": str(row.get("url", ""))[:2000],
-                                    "snippet": str(row.get("snippet", ""))[:300]})
+                                    "snippet": str(row.get("snippet", ""))[:320],
+                                    "published_at": str(row.get("published_at", ""))[:80],
+                                    "quality_score": row.get("quality_score"),
+                                    "page_excerpt": str(page.get("excerpt", ""))[:1000] if page.get("fetched") else "",
+                                    "page_fetched": bool(page.get("fetched")),
+                                    "facts": page.get("facts") if isinstance(page.get("facts"), dict) else {}})
                 result = {**result, "results": compact}
                 urls = {row["url"] for row in compact if row["url"]}
                 result["sources"] = [source for source in result.get("sources", [])
-                                     if isinstance(source, dict) and source.get("url") in urls][:2]
-                result["coverage"] = "up to two search snippets only; linked pages were not fetched or verified"
+                                     if isinstance(source, dict) and source.get("url") in urls][:limit]
+                result["verification"] = verification
+                result["coverage"] = str(result.get("coverage") or "Bounded search evidence")
+                self.web_verification = {**verification, "cache_hit": bool(result.get("cache_hit"))}
                 self.search_results.append({"query": text, "result": result})
             self.web_sources.extend(result.get("sources", []))
             return result

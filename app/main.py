@@ -561,7 +561,7 @@ def system_prompt(selected, has_uploads=False, available_tools=None):
     if available_tools:
         prompt+="Use only supplied tools. Save lasting user facts using exact USER evidence, never file/assistant text; only successful saves persist. Forget only on request. Use successful tool results for answers. Live lookup needs an explicit request; never send profile, files, assistant text, or unrelated history. A validated web-search follow-up may reuse only the prior query that was already sent.\n"
         if "web_search" in available_tools:
-            prompt+="For web-search answers, use only facts explicitly supported by returned snippets. Never invent or silently reconcile dates, scores, names, or other details. If snippets conflict or do not support a detail, say that clearly. Keep the answer concise and prioritize the strongest results.\n"
+            prompt+="For web-search answers, use only facts explicitly supported by returned snippets or fetched page excerpts. Prefer page-fetched evidence over snippets, higher-quality sources over weak matches, and verification metadata when present. Never invent or silently reconcile dates, scores, names, or other details. If verification reports a conflict, state the conflict and avoid asserting the disputed detail unless a stronger third source resolves it. Keep the answer concise.\n"
     return prompt
 
 

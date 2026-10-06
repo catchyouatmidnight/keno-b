@@ -42,3 +42,5 @@
 /* Restored workspace header */
 .topbar{display:flex!important}.floating-menu{display:none!important}.composer-bottom select[aria-label="Execution mode"]{min-width:82px}
 @media(max-width:720px){.topbar{display:flex!important}.floating-menu{display:none!important}}
+
+.source-verification{display:inline-flex;align-items:center;border:1px solid #3f3f46;border-radius:999px;padding:3px 7px;font-size:9px;color:#d4d4d8;background:#18181b}.source-verification:before{content:"";width:5px;height:5px;border-radius:50%;background:#fafafa;margin-right:5px}.source-verification.conflict{color:#a1a1aa}.source-verification.conflict:before{background:#71717a}
