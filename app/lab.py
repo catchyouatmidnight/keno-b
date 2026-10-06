@@ -16,6 +16,7 @@ def initialize():
         c.executescript('''
         CREATE TABLE IF NOT EXISTS lab_cases(id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS lab_snapshots(id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS lab_reviews(result_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS lab_results(id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL);
         ''')
 
@@ -111,7 +112,8 @@ def results(limit:int=Query(default=250,ge=1,le=500)):
             snap=c.execute('SELECT payload FROM lab_snapshots WHERE id=?',(payload['snapshot_id'],)).fetchone()
             case=c.execute('SELECT payload FROM lab_cases WHERE id=?',(payload['case_id'],)).fetchone()
             turn=c.execute('SELECT * FROM turns WHERE request_id=?',(payload['request_id'],)).fetchone() if payload['request_id'] else None
-            items.append({'id':r['id'],'created_at':r['created_at'],**payload,'configuration':json.loads(snap[0]) if snap else None,'case':payload.get('case_snapshot') or (json.loads(case[0]) if case else None),'run':{**dict(turn),'context':json.loads(turn['metadata'])} if turn else None})
+            review=c.execute('SELECT payload FROM lab_reviews WHERE result_id=?',(r['id'],)).fetchone()
+            items.append({'review':json.loads(review[0]) if review else None,'id':r['id'],'created_at':r['created_at'],**payload,'configuration':json.loads(snap[0]) if snap else None,'case':payload.get('case_snapshot') or (json.loads(case[0]) if case else None),'run':{**dict(turn),'context':json.loads(turn['metadata'])} if turn else None})
     return {'total':total,'items':items}
 
 @router.post('/results',status_code=201)
@@ -127,3 +129,15 @@ def save_result(value:Result):
         payload={**value.model_dump(),'case_snapshot':json.loads(case[0])}
         c.execute('INSERT INTO lab_results VALUES (?,?,?)',(identifier,json.dumps(payload),created))
     return {'id':identifier,'created_at':created}
+
+class Review(Strict):
+    quality: int = Field(ge=1,le=5)
+    note: str = Field(default='',max_length=2000)
+
+@router.put('/results/{identifier}/review')
+def review(identifier:str,value:Review):
+    initialize()
+    with main().db() as c:
+        if not c.execute('SELECT 1 FROM lab_results WHERE id=?',(identifier,)).fetchone():raise HTTPException(404,'Result not found')
+        c.execute('INSERT OR REPLACE INTO lab_reviews VALUES (?,?)',(identifier,value.model_dump_json()))
+    return value.model_dump()
