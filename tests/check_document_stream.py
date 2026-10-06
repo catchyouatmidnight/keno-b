@@ -95,7 +95,8 @@ async def run():
     hist = NS(reply_language=lambda *args: None,
               context=lambda *args: ([], {'compact_notes': [], 'relevant_older_excerpts': []}), refresh=lambda *args: None)
     tools = NS(catalog=lambda *args: [{'function': {'name': 'document_search'}}], SPECS={},
-               ToolSession=Session, weather_reply=lambda *args: None, memory_reply=lambda *args: None)
+               ToolSession=Session, web_search_reply=lambda *args: None,
+               weather_reply=lambda *args: None, memory_reply=lambda *args: None)
     app = NS(state=NS(llm=Client(), generation_lock=lock, lookup=None))
     docs.visual_inputs = lambda *args: ([], [])
     ns = {'documents': docs, 'tools': tools, 'setting': lambda *args: {}, 'app': app, 'db': lambda: connection,
