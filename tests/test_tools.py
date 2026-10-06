@@ -191,7 +191,7 @@ def test_history_compaction_retrieval_backup_and_delete(client,tmp_path):
     assert any('Orchid' in r['user_excerpt'] for r in notes['relevant_older_excerpts'])
     backup=tmp_path/'backup.db';backup.write_bytes(client.get('/api/v1/backup').content)
     with sqlite3.connect(backup) as c:
-        assert c.execute('PRAGMA user_version').fetchone()[0]==3
+        assert c.execute('PRAGMA user_version').fetchone()[0]==4
         assert c.execute('SELECT COUNT(*) FROM conversation_summaries').fetchone()[0]==1
     client.delete('/api/v1/conversations/'+conversation)
     with main.db() as c:
@@ -428,7 +428,7 @@ def test_memory_capability_reports_real_settings_and_identity_prompt(client):
     assert 'The USER is a different person' in prompt
     assert 'Use user evidence for identity; admit when unknown' in prompt
     assert 'only successful saves persist' in main.system_prompt([],available_tools=['memory_save'])
-    assert client.get('/api/v1/status').json()['version']=='0.3.2'
+    assert client.get('/api/v1/status').json()['version']=='0.4.0'
 
 
 def test_memory_quote_accepts_spacing_but_preserves_source_and_rejects_paraphrases(client):

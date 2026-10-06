@@ -165,7 +165,7 @@ def initialize():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with db() as c:
         version = c.execute("PRAGMA user_version").fetchone()[0]
-        if version > 3:
+        if version > 4:
             raise RuntimeError("Database is newer than this backend; refusing downgrade")
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript('''
@@ -199,7 +199,7 @@ def initialize():
         CREATE TABLE IF NOT EXISTS response_feedback (
           request_id TEXT PRIMARY KEY REFERENCES turns(request_id) ON DELETE CASCADE,
           value TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
-        PRAGMA user_version=3;
+        PRAGMA user_version=4;
         ''')
         for key, value in (("profile", Profile().model_dump()), ("identity", Identity().model_dump()), ("tools", ToolSettings().model_dump())):
             c.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", (key, json.dumps(value)))

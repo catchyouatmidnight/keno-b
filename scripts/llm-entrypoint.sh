@@ -12,7 +12,13 @@ if [ -r /runtime/model-selection.txt ]; then
   esac
 fi
 if [ -f "/managed-models/$model" ]; then model_path="/managed-models/$model"; else model_path="/models/$model"; fi
-set -- --model "$model_path" --alias "$model" "$@"
+has_model=false
+for arg in "$@"; do
+  if [ "$arg" = "--model" ] || [ "$arg" = "-m" ]; then has_model=true; break; fi
+done
+if [ "$has_model" = false ]; then
+  set -- --model "$model_path" --alias "$model" "$@"
+fi
 # Preserve argument boundaries. Never evaluate settings as shell commands.
 case "${VISION_ENABLED:-true}" in
   true)
