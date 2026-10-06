@@ -409,3 +409,11 @@ All library endpoints use the existing bearer API key; no extra encryption heade
 | POST | `/api/v1/library/ask` | Same query; optional `max_tokens` (64–2048) |
 
 Keyword-only imports use `embed:false`; keyword queries use `mode:"keyword"`. `/ask` still requires local Laya/LLM. Keyword `/search` only requires a configured document key and database.
+
+## Compact normal-chat context
+
+Routine greetings/check-ins omit recent/older chat text. Standalone questions skip unrelated history and summaries. Related/personal queries keep up to two exchanges; explicit follow-ups keep up to four, and explicit earlier-history requests enable bounded older retrieval. This is a deterministic context policy, not semantic certainty. Short connective follow-ups retain recent context conservatively. Saved response preferences remain applicable; other pinned facts require relevance. Shared instructions are compact and stable across normal messages; tool/file guidance is appended only when needed. Existing `cache_prompt` reuse remains enabled.
+
+Explicit Indonesian/English switches are stored per conversation in settings after a completed turn and survive restarts and history trimming. A confirmation such as “yea switch” is linked to the preceding user language-capability question. Existing chats can recover explicit choices from the last 200 completed user turns; other chats remain independent. Deleting a chat also deletes its language preference. A model can still give an incorrect answer; this change does not certify factual accuracy.
+
+After rebuilding only backend, compare `bash scripts/timings.sh` for a greeting, a standalone question, and a follow-up. It now reports `context_policy` and `reply_language`. Routine greetings should show zero history turns and no summary/older retrieval. Actual token counts and speed depend on configured personality/preferences, model cache, and CPU. Cold requests still need to evaluate the remaining shared prompt; no exact latency improvement is promised.

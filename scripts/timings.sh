@@ -34,7 +34,7 @@ for index, (raw,) in enumerate(rows, 1):
                 "model_first_reasoning_seconds", "hidden_reasoning_seconds", "model_first_token_seconds",
                 "first_token_seconds", "total_seconds", "elapsed_seconds",
                 "tool_seconds", "tool_model_seconds", "tool_execution_seconds", "tool_planning_rounds", "tool_planning_mode", "tool_save_required", "tool_thinking_budget",
-                "answer_source", "citation_check", "repeated_opening_removed", "stock_closing_removed", "followup_context", "prompt_tokens", "history_turns", "history_summary", "retrieved_history", "thinking_budget", "finish_reason"):
+                "answer_source", "citation_check", "repeated_opening_removed", "stock_closing_removed", "followup_context", "context_policy", "reply_language", "prompt_tokens", "history_turns", "history_summary", "retrieved_history", "thinking_budget", "finish_reason"):
         output[key] = data.get(key)
     print(json.dumps(output, indent=2))
 PY
