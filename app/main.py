@@ -213,6 +213,39 @@ def authenticate(credentials: HTTPAuthorizationCredentials | None = Depends(secu
         raise HTTPException(401, "Invalid or missing bearer token", headers={"WWW-Authenticate": "Bearer"})
 
 
+def runtime_model_roots():
+    return [Path("/models"), Path("/managed-models")]
+
+
+def runtime_dir():
+    return DB_PATH.parent / "runtime"
+
+
+def valid_runtime_model_name(name):
+    return isinstance(name, str) and bool(re.fullmatch(r"[A-Za-z0-9._-]{1,200}\.gguf", name)) and "mmproj" not in name.casefold()
+
+
+def runtime_model_exists(name):
+    return valid_runtime_model_name(name) and any((root / name).is_file() for root in runtime_model_roots())
+
+
+def runtime_name_file(name):
+    path = runtime_dir() / name
+    try:
+        value = path.read_text().strip()
+    except OSError:
+        return None
+    return value if runtime_model_exists(value) else None
+
+
+def selected_runtime_model():
+    return runtime_name_file("model-selection.txt") or LLM_MODEL
+
+
+def active_runtime_model():
+    return runtime_name_file("active-model.txt") or LLM_MODEL
+
+
 @asynccontextmanager
 async def lifespan(app):
     if len(API_KEY) < 32 or API_KEY.startswith("replace-"):
@@ -229,12 +262,18 @@ async def lifespan(app):
     if not 2048 <= CONTEXT_SIZE <= 32768:
         raise RuntimeError("CONTEXT_SIZE must be between 2048 and 32768")
     initialize()
-    global LLM_MODEL
-    selection = DB_PATH.parent / "model-selection.txt"
-    if selection.exists():
-        staged = selection.read_text().strip()
-        if re.fullmatch(r"[A-Za-z0-9._-]{1,200}\.gguf", staged) and any((root / staged).is_file() for root in (Path("/models"), Path("/managed-models"))):
-            LLM_MODEL = staged
+    runtime_dir().mkdir(parents=True, exist_ok=True)
+    legacy_selection = DB_PATH.parent / "model-selection.txt"
+    selection = runtime_dir() / "model-selection.txt"
+    if legacy_selection.exists() and not selection.exists():
+        try:
+            value = legacy_selection.read_text().strip()
+            if runtime_model_exists(value):
+                selection.write_text(value + "\n")
+                os.chmod(selection, 0o600)
+            legacy_selection.unlink(missing_ok=True)
+        except OSError:
+            pass
     app.state.generation_lock = asyncio.Lock()
     app.state.cognitive_subscribers = set()
     app.state.cognitive_started_monotonic = time.monotonic()
@@ -302,9 +341,10 @@ def system_runtime():
         total, available = values.get("MemTotal"), values.get("MemAvailable")
     except (OSError, ValueError):
         pass
-    quant = next((part for part in re.split(r"[-_.]", LLM_MODEL) if re.fullmatch(r"Q\d(?:_[A-Z0-9]+)?", part, re.I)), None)
+    model = active_runtime_model()
+    quant = next((part for part in re.split(r"[-_.]", model) if re.fullmatch(r"Q\d(?:_[A-Z0-9]+)?", part, re.I)), None)
     return {"cpu_threads_available": os.cpu_count(), "ram_bytes": total, "ram_available_bytes": available,
-            "quantization": quant, "loaded_model": LLM_MODEL, "context_size": CONTEXT_SIZE}
+            "quantization": quant, "loaded_model": model, "selected_model": selected_runtime_model(), "context_size": CONTEXT_SIZE}
 
 
 async def service_ready(client, path="/health", timeout=1.2):
@@ -328,7 +368,7 @@ async def status():
     except httpx.HTTPError:
         pass
     lookup_ready, lookup_detail = lookup_state
-    return {"backend": "ready", "model": LLM_MODEL, "model_ready": model_state[0],
+    return {"backend": "ready", "model": active_runtime_model(), "model_ready": model_state[0],
             "generating": app.state.generation_lock.locked(), "context_size": CONTEXT_SIZE,
             "inference": "self-hosted", "memory_mode": "automatic" if setting("tools")["automatic_memory"] else "explicit", "version": VERSION,
             "router": "laya", "router_ready": router_state[0], "vision_enabled": VISION_ENABLED,
@@ -1108,7 +1148,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                             tool_planning_mode="saved_field_guard" if field_guarded else "user_name_guard", tool_save_required=False,
                             tool_calls=[], memory_changes=[])
         elif definitions:
-            async for name, data in agent.plan(app.state.llm, LLM_MODEL, messages, definitions, session, metadata, check_tool_budget):
+            async for name, data in agent.plan(app.state.llm, active_runtime_model(), messages, definitions, session, metadata, check_tool_budget):
                 yield name, data
         planner_reply = metadata.pop("_planner_reply", None)
         calculation_guarded = metadata.pop("_calculation_reply", None)
@@ -1149,7 +1189,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
             model_started = time.monotonic()
             web_answer = metadata.get("route", {}).get("tool_policy") in {"explicit_web_search", "web_search_followup", "explicit_web_search_and_save"}
             answer_tokens = min(metadata["effective_max_tokens"], 384) if web_answer else metadata["effective_max_tokens"]
-            payload = {"model": LLM_MODEL, "messages": messages, "stream": True,
+            payload = {"model": active_runtime_model(), "messages": messages, "stream": True,
                        "temperature": 0.2 if web_answer else 0.6, "max_tokens": answer_tokens + metadata.get("thinking_budget", 0),
                        "chat_template_kwargs": {"enable_thinking": metadata.get("route", {}).get("thinking", False)},
                        "reasoning_format": "deepseek", "reasoning_budget_tokens": metadata.get("thinking_budget", 0),
@@ -1410,10 +1450,6 @@ async def chat(value: ChatInput):
         raise HTTPException(502, "Local inference failed. Retry using the same request_id.")
 
 
-def runtime_model_roots():
-    return [Path("/models"), Path("/managed-models")]
-
-
 @app.get("/api/v1/runtime/models", dependencies=[Depends(authenticate)])
 def runtime_models():
     files = []
@@ -1427,31 +1463,43 @@ def runtime_models():
             seen.add(path.name)
             match = re.search(r"(Q\d(?:_[A-Z0-9]+)*)", path.name, re.I)
             files.append({"name": path.name, "bytes": path.stat().st_size, "quantization": match.group(1) if match else None,
-                          "loaded": path.name == LLM_MODEL, "managed": root.name == "managed-models"})
-    selection = DB_PATH.parent / "model-selection.txt"
-    pending = selection.read_text().strip() if selection.exists() else None
+                          "loaded": path.name == active_runtime_model(), "managed": root.name == "managed-models"})
+    selected = selected_runtime_model()
+    loaded = active_runtime_model()
+    pending = selected if selected != loaded else None
     runtime = system_runtime()
     ram = runtime.get("ram_bytes") or 0
     recommendation = {"threads": max(1, min(os.cpu_count() or 1, 6)),
                       "context_size": 4096 if ram and ram < 8 * 1024**3 else 8192,
                       "quantization": "Q4_K_M", "reason": "Balanced CPU/RAM default; benchmark before increasing context."}
-    return {"installed": files, "loaded": LLM_MODEL, "pending": pending, "recommendation": recommendation,
-            "activation": "Select a model here, then recreate llm and backend. No .env edit is required."}
+    return {"installed": files, "loaded": loaded, "selected": selected, "pending": pending, "recommendation": recommendation,
+            "activation": "One-click activation restarts llama.cpp inside its own container; Docker access is not exposed to the web app."}
 
 
 @app.put("/api/v1/runtime/model", dependencies=[Depends(authenticate)])
-def select_runtime_model(value: RuntimeModelInput):
+async def select_runtime_model(value: RuntimeModelInput):
     name = Path(value.name).name
-    if name != value.name or not name.endswith(".gguf") or "mmproj" in name.casefold():
+    if name != value.name or not valid_runtime_model_name(name):
         raise HTTPException(422, "Select an installed GGUF model file")
-    target = next((root / name for root in runtime_model_roots() if (root / name).is_file()), None)
-    if target is None:
+    if not runtime_model_exists(name):
         raise HTTPException(404, "Model file is not installed")
-    path = DB_PATH.parent / "model-selection.txt"
-    path.write_text(name + "\n")
-    os.chmod(path, 0o600)
-    return {"pending": name, "loaded": LLM_MODEL, "restart_required": name != LLM_MODEL,
-            "command": "docker compose up -d --force-recreate llm backend"}
+    if app.state.generation_lock.locked():
+        raise HTTPException(409, "Wait for the active response before switching models")
+    async with app.state.generation_lock:
+        runtime_dir().mkdir(parents=True, exist_ok=True)
+        path = runtime_dir() / "model-selection.txt"
+        temporary = runtime_dir() / "model-selection.txt.tmp"
+        temporary.write_text(name + "\n")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        deadline = time.monotonic() + 180
+        last_ready = False
+        while time.monotonic() < deadline:
+            last_ready, _ = await service_ready(app.state.llm, timeout=2.0)
+            if last_ready and active_runtime_model() == name:
+                return {"selected": name, "loaded": name, "activated": True, "restart_required": False}
+            await asyncio.sleep(.5)
+    raise HTTPException(504, "Model switch was requested but llama.cpp did not become ready within 180 seconds")
 
 
 @app.post("/api/v1/runtime/models/download", dependencies=[Depends(authenticate)])

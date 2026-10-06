@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v docker >/dev/null || { echo 'Install Docker Engine and the Compose plugin first.' >&2; exit 1; }
 docker compose version >/dev/null
-mkdir -p models data backups
+mkdir -p models data data/runtime backups
 if [[ ! -e .env ]]; then
   umask 077
   cp .env.example .env

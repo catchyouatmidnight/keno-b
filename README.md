@@ -1,6 +1,6 @@
 # Keno backend
 
-A self-hosted personal assistant with a local LLM, persistent personal data, and a browser test console. Android will connect to this API later. Version 0.3.2 includes bounded tool calling, automatic memory, broader document coverage, compact history, Markdown answers, and optional live lookups. Android comes later.
+A self-hosted personal assistant with a local LLM, persistent personal data, and a browser test console. Android will connect to this API later. Version 0.4.0 adds verified two-source web research, bounded multi-step agent workflows, Fast/Balanced/Deep execution modes, live Brain Synapsis events, persistent chat feedback/branching, managed memories, hierarchical document folders with encrypted version history, hot local-model activation, latency observability, and a service-health Home dashboard.
 
 ## Start on a Linux server
 
@@ -159,7 +159,7 @@ Automatic memory is enabled by default in Tools. Laya selects a tool family; Qwe
 
 ## Tools and optional live information
 
-Laya chooses `none`, `memory`, `documents`, `calculator`, `live`, or `multiple`; Qwen uses native llama.cpp tool calls for that family. There are at most two planning rounds and four calls per request, with strict argument validation. The final answer streams after the tool phase. Ordinary chats routed to `none` skip planning. Tool requests add model inference and can take longer on CPU; `tool_seconds` separates this overhead from answer timing. Memory/document results and web snippets are treated as reference data, not instructions. The calculator accepts bounded numeric arithmetic, never Python execution or shell commands.
+Laya chooses `none`, `memory`, `documents`, `calculator`, `live`, or `multiple`; Qwen uses native llama.cpp tool calls for that family. Fast/Balanced/Deep modes allow one/two/four bounded planning rounds, with at most four executed tool calls and strict argument validation. Deterministic explicit search, document, calculation, calendar and common memory actions bypass Laya where possible. Retrieval tools can continue into controlled follow-up steps such as search → inspect evidence → answer or document search → read/compare → summarize. An explicit “search … and remember the result” may save only a verbatim successful tool result as temporary memory. The final answer streams after the tool phase. `tool_model_seconds`, `retrieval_seconds`, `action_tool_seconds`, and `tool_execution_seconds` separate planner, retrieval, non-retrieval execution, and total tool time. Tool evidence is reference data, not instructions.
 
 Weather and web search are **off by default**. Simple current-weather questions use a backend answer guard: disabled lookup settings return an explanation, missing/invalid cities ask for a city, unavailable lookups report failure, and successful results are rendered directly from returned temperature/location/time fields. These replies cannot fall through to invented model weather JSON. Broader conceptual/document questions retain the normal model answer path. If you want them, start the optional services:
 
@@ -169,7 +169,7 @@ bash scripts/enable-live.sh
 
 Then connect to the console, open **Tools**, enable the desired lookup, and save. The script creates a local random SearXNG secret and starts `lookup` and `search`; it does not turn on the user settings. Disable the checkboxes to stop calls, or stop optional services with `docker compose --profile live stop lookup search`.
 
-Weather sends only a city verbatim from the current request to Open-Meteo geocoding, then the matched coordinates to its forecast API. Confirm the returned location when a city name is ambiguous. Search sends an explicit search phrase to self-hosted SearXNG, whose configured search engines receive it. A validated conversational refinement can reuse the immediately prior search query that was already sent and append the current follow-up; it never adds assistant text, profile, memories, files, or unrelated history. Providers receive that search query and ordinary connection metadata, not the full prompt. If you include private text in a search request, that chosen phrase can leave the server. The backend rejects queries supplied only by a profile, memory or attachment. Search ranks the top results, fetches the top two public HTML/text pages through the isolated lookup service with strict size/time limits, and extracts bounded relevant passages. A third result is fetched only when the first two expose conflicting date/score facts. Repeated searches are cached briefly in lookup-service memory. This verification is heuristic evidence checking, not a guarantee of truth. Clicking external source links opens those websites in your browser. Weather data is a model estimate, not a local sensor reading.
+Weather sends only a city verbatim from the current request to Open-Meteo geocoding, then the matched coordinates to its forecast API. Confirm the returned location when a city name is ambiguous. Search sends an explicit search phrase to self-hosted SearXNG, whose configured search engines receive it. A validated conversational refinement can reuse the immediately prior search query that was already sent and append the current follow-up; it never adds assistant text, profile, memories, files, or unrelated history. Providers receive that search query and ordinary connection metadata, not the full prompt. If you include private text in a search request, that chosen phrase can leave the server. The backend rejects queries supplied only by a profile, memory or attachment. Search ranks results by query relevance, HTTPS quality and freshness, fetches the top two public HTML/text pages through the isolated lookup service with strict size/time limits, and extracts bounded relevant passages. It compares scores, dates, numeric/labeled claims and other structured factual signals across those pages. A third result is fetched only when the first two conflict; a two-of-three majority can mark the conflict resolved. Repeated searches and fetched pages are cached briefly. The UI shows `Verified from 2 sources` only when independent fetched evidence agrees. Verification remains heuristic evidence checking, not a guarantee of truth. Clicking external source links opens those websites in your browser. Weather data is a model estimate, not a local sensor reading.
 
 The lookup service alone bridges private and egress networks. Search has egress access and no database/model mounts or published port. Backend/Qwen/Laya remain private. SearXNG's optional image defaults to the official `latest`; set `SEARXNG_IMAGE` to your tested digest for reproducibility. Optional lookup/search memory ceilings are 192 MB/512 MB; measure total RAM on the target server.
 
@@ -234,7 +234,7 @@ git pull origin main
 docker compose up -d --build backend
 ```
 
-Version 0.3 automatically migrates schema 1/2 to 3 while preserving personal data. Rolling back to older code requires restoring the pre-upgrade backup; older code rejects schema 3. Updating code and running `docker compose up -d --build` preserves your data. Schema version checks reject newer databases rather than silently downgrading. Training is not required or implemented in this release. A future adapter-training workflow will be a separate opt-in operation.
+Version 0.4 uses database schema 4 and migrates older supported schemas while preserving personal data. Rolling back to older code requires restoring a compatible pre-upgrade backup. Updating code and running `docker compose up -d --build` preserves your data. Schema version checks reject newer databases rather than silently downgrading. Training is not required or implemented in this release. A future adapter-training workflow will be a separate opt-in operation.
 
 ## Change the model
 
@@ -283,13 +283,9 @@ Set `LLM_LOG_VERBOSITY=3` in `.env` and recreate `llm` to expose informational p
 
 ### Other compatible models
 
-Put a compatible chat GGUF in `models/`, update `MODEL_FILE` in `.env`, and recreate services:
+Put a compatible chat GGUF in `models/`, or use **Settings → Runtime** to download a GGUF from an HTTPS Hugging Face resolve URL into the managed-model volume. The Runtime page lists installed models, quantization, RAM/context information and a CPU/RAM recommendation. Selecting **Activate selected model** writes only a validated basename to the shared runtime-state directory; the llama.cpp container supervisor restarts its child process internally and the backend waits for health to return. No Docker socket is exposed to the browser or backend, no `.env` edit is required, and the backend container does not restart.
 
-```bash
-docker compose up -d --force-recreate
-```
-
-Your profile, personality, and history remain intact. This adapter specifically expects llama.cpp’s `/apply-template`, `/tokenize`, and streaming chat endpoints; it is not a generic remote-provider connector. The configured runtime includes Qwen chat templates and delegates thinking to Laya. Other model families must be tested with their own template and sampling settings. A vision model needs its matching `MMPROJ_FILE`; do not reuse the Qwen 2B projector with the previous 4B model.
+Your profile, personality and history remain intact. This adapter specifically expects llama.cpp’s `/apply-template`, `/tokenize`, and streaming chat endpoints; it is not a generic remote-provider connector. The configured runtime includes Qwen chat templates and delegates thinking to Laya. Other model families must be tested with their own template and sampling settings. A vision model needs its matching `MMPROJ_FILE`; do not reuse the Qwen 2B projector with the previous 4B model.
 
 Start with `CONTEXT_SIZE=8192`, `CPU_THREADS=4`, and `LLM_MEMORY_LIMIT=6g` on an 8 GB machine. Backend memory is capped at 768 MB; the gateway at 64 MB, and Laya at 3 GB (a ceiling, not a reservation). The CPU-only Laya image uses PyTorch 2.8.0, Transformers 4.57.1 and Laya 0.3.26. A model-loading OOM requires a smaller model or more RAM; increasing context also increases resource use. Reduce thread count on small CPUs. Check `docker stats` on your actual server before treating these defaults as a sizing guarantee.
 
@@ -391,21 +387,26 @@ Embeddings use `@huggingface/transformers` 3.8.1 and Xenova/multilingual-e5-smal
 
 Supported: PDF, DOCX, XLSX, PPTX, ODT/ODS/ODP, Markdown, UTF-8 TXT, CSV/TSV, JSON, XML and HTML. Export Google Docs/Sheets/Slides to DOCX/XLSX/PPTX or PDF first. Private Google links/shortcuts, legacy DOC/XLS/PPT and arbitrary binary files are not connected or parsed. Macros, formulas, scripts and external resources never execute. XLSX retains sheet/cell references; PPTX includes slide text, tables and notes. PDF has page references and local Tesseract OCR for up to 20 pages lacking text (English/Indonesian). OCR images pass through stdin instead of plaintext temp files. OCR may be wrong; office artwork/charts are not visually interpreted. OpenDocument extraction is text-focused and can lose table layout.
 
-Limits: 8 MB/file, 200,000 extracted characters, 300 passages/document, 50 documents, 2,000 total passages and 96 MB encrypted payloads. ZIP expansion and macro checks bound extraction. Classification uses format plus a lightweight keyword topic, not a semantic guarantee. Laya makes one batched call to choose focused/overview retrieval and quick/deeper effort; it does not create embeddings. Hybrid retrieval combines keyword and cosine-vector ranks over the bounded decrypted index in RAM. No plaintext disk search index is created.
+Limits: 8 MB/file, 200,000 extracted characters, 300 passages/document, 50 documents, 2,000 total passages and 192 MB across encrypted current files plus retained version history. ZIP expansion and macro checks bound extraction. Classification uses format plus a lightweight keyword topic, not a semantic guarantee. Laya makes one batched call to choose focused/overview retrieval and quick/deeper effort; it does not create embeddings. Hybrid retrieval combines keyword and cosine-vector ranks over the bounded decrypted index in RAM. No plaintext disk search index is created.
 
 Focused questions supply up to eight passages; overviews sample up to twelve across documents, reduced to fit the LLM context. An overview is not a complete review of every page. Answers show coverage, warnings and source excerpts. Citation IDs are validated, not factual correctness. Answers currently return when complete, rather than streaming. Documents are RAG evidence, not automatically personal facts or training data. Select documents to narrow search, or leave unchecked to search all.
 
-Replace documents to update their current version/index. Re-import a keyword-only document as a replacement with embeddings enabled to add semantic retrieval. Same-content imports are deduplicated. Deletion removes current originals/indexes, but backups/WAL may retain encrypted copies. Row IDs and ciphertext sizes remain visible. Avoid payload logging in any added proxy.
+Documents can be organized into collections plus hierarchical folder paths such as `Projects/Keno/Roadmap`; selecting a parent folder searches its descendants. Tags and custom metadata remain encrypted with the document record. Replacing or re-indexing a document creates a new current version while retaining encrypted historical originals/index records. The UI lists version history, allows downloading an older original and can restore an older version as a new current version without re-embedding it. Re-import a keyword-only document as a replacement with embeddings enabled to add semantic retrieval. Same-content imports are deduplicated. Deletion removes the document and its retained version history, but backups/WAL may retain encrypted copies. Row IDs and ciphertext sizes remain visible. Avoid payload logging in any added proxy.
 
 All library endpoints use the existing bearer API key; no extra encryption header or unlock request is needed. The document key never travels to the browser. Download the runtime schema at `/api/v1/openapi.json`.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | GET | `/api/v1/library/status` | Readiness, supported formats and key/configuration errors |
-| GET / POST | `/api/v1/library/documents` | List / import `{ "name": "notes.md", "data_base64": "...", "embed": true }` |
-| DELETE | `/api/v1/library/documents/{id}` | Delete current document and index |
-| GET | `/api/v1/library/documents/{id}/download` | Automatically decrypt/download original |
-| POST | `/api/v1/library/search` | `{ "question": "...", "document_ids": [], "mode": "hybrid" }` |
+| GET / POST | `/api/v1/library/documents` | List / import with optional `collection`, hierarchical `folder`, `tags` and metadata |
+| GET | `/api/v1/library/folders` | Folder hierarchy with descendant-aware document counts |
+| GET | `/api/v1/library/documents/{id}/versions` | Browse retained encrypted version history |
+| POST | `/api/v1/library/documents/{id}/versions/{version}/restore` | Restore an older version as a new current version |
+| GET | `/api/v1/library/documents/{id}/versions/{version}/download` | Decrypt/download a historical original |
+| POST | `/api/v1/library/documents/{id}/reindex` | Re-extract/re-embed as a new version |
+| DELETE | `/api/v1/library/documents/{id}` | Delete the document and retained version history |
+| GET | `/api/v1/library/documents/{id}/download` | Automatically decrypt/download current original |
+| POST | `/api/v1/library/search` | Query selected documents, collections and/or folder subtrees using hybrid or keyword retrieval |
 | POST | `/api/v1/library/ask` | Same query; optional `max_tokens` (64–2048) |
 
 Keyword-only imports use `embed:false`; keyword queries use `mode:"keyword"`. `/ask` still requires local Laya/LLM. Keyword `/search` only requires a configured document key and database.

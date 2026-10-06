@@ -88,7 +88,7 @@ services:
     volumes:
       - ./models:/models:ro
       - managed_models:/managed-models:ro
-      - ./data:/runtime:ro
+      - ./data/runtime:/runtime
       - ./scripts/llm-entrypoint.sh:/config/llm-entrypoint.sh:ro
     networks: [private]
     mem_limit: ${LLM_MEMORY_LIMIT:-6g}

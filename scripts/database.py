@@ -9,6 +9,7 @@ DB = Path(os.environ.get("KENO_DB", "/data/keno.db"))
 TABLES = {"settings", "conversations", "memories", "turns"}
 V4_TABLES = {"memory_meta", "conversation_preferences", "response_feedback"}
 VAULT_TABLES = {"vault_config", "vault_documents", "vault_originals"}
+VAULT_VERSION_TABLES = {"vault_document_versions", "vault_original_versions"}
 
 
 def snapshot(source, destination):
@@ -30,8 +31,10 @@ def validate(path):
             raise ValueError("Unsupported backup schema version")
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         expected = TABLES | ({"attachments"} if version >= 2 else set()) | ({"conversation_summaries"} if version >= 3 else set()) | (V4_TABLES if version >= 4 else set())
-        if tables & VAULT_TABLES:
+        if tables & (VAULT_TABLES | VAULT_VERSION_TABLES):
             expected |= VAULT_TABLES
+            if tables & VAULT_VERSION_TABLES:
+                expected |= VAULT_VERSION_TABLES
         if tables != expected or c.execute("SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view')").fetchone():
             raise ValueError("Unexpected database structure")
         if c.execute("PRAGMA foreign_key_check").fetchone():

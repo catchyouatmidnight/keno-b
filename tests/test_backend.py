@@ -644,3 +644,22 @@ def test_execution_modes_bound_work_and_emit_cognitive_events(client):
     assert deep['context']['execution_mode'] == 'deep'
     assert deep['context']['route']['thinking'] is True
     assert deep['context']['thinking_budget'] == 384
+
+
+
+def test_runtime_model_switch_is_hot_and_does_not_require_docker(client,tmp_path,monkeypatch):
+    models=tmp_path/'models';models.mkdir()
+    target=models/'Test-Q4_K_M.gguf';target.write_bytes(b'gguf fixture')
+    monkeypatch.setattr(main,'runtime_model_roots',lambda:[models])
+    async def ready(_client,path='/health',timeout=1.2):
+        selected=(main.runtime_dir()/'model-selection.txt').read_text().strip()
+        main.runtime_dir().mkdir(parents=True,exist_ok=True)
+        (main.runtime_dir()/'active-model.txt').write_text(selected+'\n')
+        return True,{'status':'ok'}
+    monkeypatch.setattr(main,'service_ready',ready)
+    result=client.put('/api/v1/runtime/model',json={'name':target.name})
+    assert result.status_code==200,result.text
+    assert result.json()=={'selected':target.name,'loaded':target.name,'activated':True,'restart_required':False}
+    state=client.get('/api/v1/runtime/models').json()
+    assert state['loaded']==target.name and state['pending'] is None
+    assert 'One-click activation' in state['activation']

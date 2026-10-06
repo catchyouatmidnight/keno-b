@@ -52,12 +52,21 @@ def test_reindex_replace_delete_and_tamper(documents_client,monkeypatch):
     assert documents_client.post('/api/v1/library/search',json={'question':'budget'}).status_code==200
     assert upload(documents_client,'New budget 9400.',replace_id=first['id']).json()['version']==3
     assert b'9400' in documents_client.get('/api/v1/library/documents/'+first['id']+'/download').content
+    versions=documents_client.get(f"/api/v1/library/documents/{first['id']}/versions").json()
+    assert [item['version'] for item in versions]==[3,2,1]
+    assert b'7402' in documents_client.get(f"/api/v1/library/documents/{first['id']}/versions/1/download").content
+    restored=documents_client.post(f"/api/v1/library/documents/{first['id']}/versions/1/restore").json()
+    assert restored['version']==4
+    assert b'7402' in documents_client.get('/api/v1/library/documents/'+first['id']+'/download').content
     with main.db() as db:
         data=bytearray(db.execute('SELECT payload FROM vault_documents').fetchone()[0]);data[-1]^=1
         db.execute('UPDATE vault_documents SET payload=?',(bytes(data),))
     assert documents_client.get('/api/v1/library/documents').status_code==422
     assert documents_client.delete('/api/v1/library/documents/'+first['id']).status_code==200
-    with main.db() as db:assert db.execute('SELECT count(*) FROM vault_originals').fetchone()[0]==0
+    with main.db() as db:
+        assert db.execute('SELECT count(*) FROM vault_originals').fetchone()[0]==0
+        assert db.execute('SELECT count(*) FROM vault_document_versions').fetchone()[0]==0
+        assert db.execute('SELECT count(*) FROM vault_original_versions').fetchone()[0]==0
 
 
 def model(answer,calls):
@@ -112,18 +121,20 @@ def test_xml_entity_and_macro_rejection():
 
 def test_collections_tags_hybrid_fallback_and_reindex(documents_client,monkeypatch):
     c=documents_client
-    first=upload(c,'Atlas deadline is April 2027.','atlas.txt',collection='Projects',tags=['atlas','deadline']).json()
-    second=upload(c,'Cooking notes for soup.','food.txt',collection='Personal',tags=['food']).json()
+    first=upload(c,'Atlas deadline is April 2027.','atlas.txt',collection='Projects',folder='Projects/Keno/Roadmap',tags=['atlas','deadline']).json()
+    second=upload(c,'Cooking notes for soup.','food.txt',collection='Personal',folder='Personal/Recipes',tags=['food']).json()
     listing=c.get('/api/v1/library/documents').json()
     atlas=next(d for d in listing if d['id']==first['id'])
-    assert atlas['collection']=='Projects' and atlas['tags']==['atlas','deadline']
+    assert atlas['collection']=='Projects' and atlas['folder']=='Projects/Keno/Roadmap' and atlas['tags']==['atlas','deadline']
     collections=c.get('/api/v1/library/collections').json()['collections']
     assert {item['name'] for item in collections}=={'Projects','Personal'}
+    folders=c.get('/api/v1/library/folders').json()['folders']
+    assert {item['path'] for item in folders}>={'Projects','Projects/Keno','Projects/Keno/Roadmap','Personal','Personal/Recipes'}
 
-    result=c.post('/api/v1/library/search',json={'question':'Atlas deadline','collections':['Projects'],'mode':'hybrid'}).json()
+    result=c.post('/api/v1/library/search',json={'question':'Atlas deadline','folders':['Projects/Keno'],'mode':'hybrid'}).json()
     assert result['mode']=='keyword_fallback'
     assert result['excerpts'][0]['document_id']==first['id']
-    assert all(e['collection']=='Projects' for e in result['excerpts'])
+    assert all(e['collection']=='Projects' and e['folder'].startswith('Projects/Keno') for e in result['excerpts'])
     assert 'rerank_score' in result['excerpts'][0]
 
     async def vectors(texts,kind):return [[1.0]+[0.0]*383 for _ in texts]
@@ -132,4 +143,4 @@ def test_collections_tags_hybrid_fallback_and_reindex(documents_client,monkeypat
     assert reindexed.status_code==200,reindexed.text
     body=reindexed.json()
     assert body['version']==2 and body['embedding_model']==library.MODEL
-    assert body['collection']=='Projects' and body['tags']==['atlas','deadline']
+    assert body['collection']=='Projects' and body['folder']=='Projects/Keno/Roadmap' and body['tags']==['atlas','deadline']

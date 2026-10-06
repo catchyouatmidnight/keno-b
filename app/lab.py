@@ -59,7 +59,7 @@ class Result(Strict):
 def config():
     m=main()
     identity=m.setting('identity')
-    return {'model':m.LLM_MODEL,'context_size':m.CONTEXT_SIZE,'vision_enabled':m.VISION_ENABLED,
+    return {'model':m.active_runtime_model(),'context_size':m.CONTEXT_SIZE,'vision_enabled':m.VISION_ENABLED,
             'version':m.VERSION,'router':'laya','max_concurrency':1,'queue_supported':False,
             'prompt_identity_sha256':hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest(),
             'tools':m.setting('tools'),'timing_note':'Durations overlap; first-delta latency includes prompt processing and possible waiting, not an isolated prompt-eval measurement.'}

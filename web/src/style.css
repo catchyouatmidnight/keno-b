@@ -54,3 +54,6 @@
 
 /* Duration-driven cognitive intensity */
 .anatomy-stage{--brain-intensity:.22;--brain-speed:1.5s}.brain-lobe.active{opacity:calc(.58 + var(--brain-intensity)*.42)}.anatomy-network.active{opacity:calc(.35 + var(--brain-intensity)*.65)}.anatomy-network.active line{animation-duration:var(--brain-speed)}.anatomy-network.active circle{animation-duration:var(--brain-speed)}.activity-core{opacity:calc(.35 + var(--brain-intensity)*.65)}.core-ring{animation-duration:var(--brain-speed)}.incoming-signals{opacity:calc(.35 + var(--brain-intensity)*.65)}.incoming-signals path{animation-duration:var(--brain-speed)}.brain-region-card.active{box-shadow:0 0 calc(10px + 18px*var(--brain-intensity)) #fff1,inset 0 0 calc(10px + 14px*var(--brain-intensity)) #fff1}
+
+/* Document folder and version history */
+.version-list{display:grid;gap:7px;margin:10px 0}.version-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:7px;background:var(--panel-raised);padding:9px 10px}.version-row strong,.version-row small{display:block}.version-row small{color:var(--muted);font-size:9px;margin-top:2px}
