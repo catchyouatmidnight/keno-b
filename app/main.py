@@ -24,7 +24,7 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import documents, routing, tools, history, agent, response_style, context_policy, calendar_tools
 
-VERSION = "0.3.2"
+VERSION = "0.4.0"
 DB_PATH = Path(os.environ.get("KENO_DB", "data/keno.db"))
 API_KEY = os.environ.get("KENO_API_KEY", "")
 LLM_URL = os.environ.get("LLM_URL", "http://llm:8080").rstrip("/")
@@ -581,7 +581,15 @@ def conversation(conversation_id: str):
         row = c.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Conversation not found")
-        turns = [dict(t) for t in c.execute("SELECT * FROM turns WHERE conversation_id=? ORDER BY created_at", (conversation_id,))]
+        turns = []
+        for item in c.execute("""SELECT t.*,f.value feedback_value,f.note feedback_note
+                                 FROM turns t LEFT JOIN response_feedback f ON f.request_id=t.request_id
+                                 WHERE t.conversation_id=? ORDER BY t.created_at""", (conversation_id,)):
+            turn = dict(item)
+            feedback_value = turn.pop("feedback_value", None)
+            feedback_note = turn.pop("feedback_note", None)
+            turn["feedback"] = {"value": feedback_value, "note": feedback_note or ""} if feedback_value else None
+            turns.append(turn)
     return {**dict(row), "turns": turns}
 
 
@@ -712,10 +720,10 @@ def continued_web_query(previous_query, message):
 
 def execution_limits(value):
     if value.execution_mode == "fast":
-        return {"history": 2, "thinking_budget": 0, "output": min(value.max_tokens, 384)}
+        return {"history": 2, "thinking_budget": 0, "output": min(value.max_tokens, 384), "context": min(CONTEXT_SIZE, 4096)}
     if value.execution_mode == "deep":
-        return {"history": 6, "thinking_budget": THINKING_BUDGET, "output": value.max_tokens}
-    return {"history": 4, "thinking_budget": None, "output": min(value.max_tokens, 1024)}
+        return {"history": 6, "thinking_budget": THINKING_BUDGET, "output": value.max_tokens, "context": CONTEXT_SIZE}
+    return {"history": 4, "thinking_budget": None, "output": min(value.max_tokens, 2048), "context": min(CONTEXT_SIZE, 6144)}
 
 
 def apply_execution_mode(route, value):
@@ -863,7 +871,7 @@ async def fit_context(value, route=None, attachments=None):
         tokenized.raise_for_status()
         count = len(tokenized.json()["tokens"])
         reserved_output = max(512 + thinking_tokens if definitions else 0, limits["output"] + thinking_tokens)
-        if count + image_reserve + reserved_output + 128 <= CONTEXT_SIZE:
+        if count + image_reserve + reserved_output + 128 <= limits["context"]:
             if images:
                 messages[-1]["content"] = [{"type": "text", "text": text}] + [{"type": "image_url", "image_url": {"url": image}} for image in images]
             return messages, {"memory_keys": [m["key"] for m in selected], "history_turns": len(recent), "prompt_tokens": count,
@@ -872,7 +880,7 @@ async def fit_context(value, route=None, attachments=None):
                               "document_answer_mode": "direct_stream" if direct_document else None,
                               "document_evidence_characters": sum(len(e["text"]) for e in excerpts),
                               "context_policy": policy["mode"], "reply_language": reply_language, "followup_context": followup, "history_summary": bool(older["compact_notes"]), "retrieved_history": len(older["relevant_older_excerpts"]),
-                              "execution_mode": value.execution_mode, "effective_max_tokens": limits["output"],
+                              "execution_mode": value.execution_mode, "effective_max_tokens": limits["output"], "effective_context_size": limits["context"],
                               "memory_enabled": memory_enabled, "memory_retrieval": memory_retrieval,
                               "attachment_ids": [a["id"] for a in attachments],
                               "document_sources": [{**{k: c[k] for k in ("attachment_id", "name", "page", "chunk")},
@@ -943,7 +951,8 @@ async def check_tool_budget(messages, metadata, definitions):
         count = len(tokenized.json()["tokens"])
         reserve = max(512 + metadata.get("thinking_budget", 0) if definitions else 0,
                       metadata.get("max_tokens", 512) + metadata.get("thinking_budget", 0))
-        if count + metadata.get("image_token_reserve", 0) + reserve + 128 <= CONTEXT_SIZE:
+        context_limit = int(metadata.get("effective_context_size", CONTEXT_SIZE))
+        if count + metadata.get("image_token_reserve", 0) + reserve + 128 <= context_limit:
             metadata["prompt_tokens"] = count
             return
         changed = False

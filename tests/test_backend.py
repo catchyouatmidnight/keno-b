@@ -611,10 +611,12 @@ def test_conversation_memory_optout_branch_feedback_and_memory_metadata(client):
     branch = client.post(f'/api/v1/conversations/{cid}/branch',
                          json={'request_id': second['request_id'], 'include_target': False}).json()
     copied = client.get('/api/v1/conversations/'+branch['id']).json()['turns']
-    assert len(copied) == 1 and copied[0]['user_text'] == first['context'].get('original_user_text','Hello')
+    assert len(copied) == 1 and copied[0]['user_text'] == 'Hello'
 
     feedback = client.put('/api/v1/runs/branch-source-002/feedback', json={'value':'up','note':'useful'}).json()
     assert feedback['value'] == 'up'
+    persisted = client.get(f'/api/v1/conversations/{cid}').json()['turns'][-1]['feedback']
+    assert persisted == {'value':'up','note':'useful'}
     assert client.put('/api/v1/runs/branch-source-002/feedback', json={'value':'clear','note':''}).json()['value'] is None
 
     memory = client.put('/api/v1/memories/project',
