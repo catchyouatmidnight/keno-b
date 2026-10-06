@@ -7,6 +7,7 @@ from pathlib import Path
 
 DB = Path(os.environ.get("KENO_DB", "/data/keno.db"))
 TABLES = {"settings", "conversations", "memories", "turns"}
+VAULT_TABLES = {"vault_config", "vault_documents", "vault_originals"}
 
 
 def snapshot(source, destination):
@@ -28,6 +29,8 @@ def validate(path):
             raise ValueError("Unsupported backup schema version")
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         expected = TABLES | ({"attachments"} if version >= 2 else set()) | ({"conversation_summaries"} if version >= 3 else set())
+        if tables & VAULT_TABLES:
+            expected |= VAULT_TABLES
         if tables != expected or c.execute("SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view')").fetchone():
             raise ValueError("Unexpected database structure")
         if c.execute("PRAGMA foreign_key_check").fetchone():

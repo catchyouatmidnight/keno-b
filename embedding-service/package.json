@@ -1,0 +1,1 @@
+{"name":"keno-embedding","private":true,"type":"module","dependencies":{"@huggingface/transformers":"3.8.1"}}

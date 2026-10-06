@@ -810,6 +810,380 @@
           }
         ]
       }
+    },
+    "/api/v1/library/status": {
+      "get": {
+        "tags": [
+          "Encrypted document library"
+        ],
+        "summary": "Vault status",
+        "responses": {
+          "200": {
+            "description": "Successful vault operation"
+          },
+          "401": {
+            "description": "Missing/invalid bearer key"
+          },
+          "423": {
+            "description": "Vault locked"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/library/setup": {
+      "post": {
+        "tags": [
+          "Encrypted document library"
+        ],
+        "summary": "Vault setup",
+        "responses": {
+          "200": {
+            "description": "Successful vault operation"
+          },
+          "401": {
+            "description": "Missing/invalid bearer key"
+          },
+          "423": {
+            "description": "Vault locked"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VaultPassword"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/library/unlock": {
+      "post": {
+        "tags": [
+          "Encrypted document library"
+        ],
+        "summary": "Vault unlock",
+        "responses": {
+          "200": {
+            "description": "Successful vault operation"
+          },
+          "401": {
+            "description": "Missing/invalid bearer key"
+          },
+          "423": {
+            "description": "Vault locked"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VaultPassword"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/library/lock": {
+      "post": {
+        "tags": [
+          "Encrypted document library"
+        ],
+        "summary": "Vault lock",
+        "responses": {
+          "200": {
+            "description": "Successful vault operation"
+          },
+          "401": {
+            "description": "Missing/invalid bearer key"
+          },
+          "423": {
+            "description": "Vault locked"
+          }
+        },
+        "parameters": [
+          {
+            "name": "x-keno-vault",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Short-lived unlock token"
+          }
+        ],
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/library/documents": {
+      "get": {
+        "tags": [
+          "Encrypted document library"
+        ],
+        "summary": "Vault documents",
+        "responses": {
+          "200": {
+            "description": "Successful vault operation"
+          },
+          "401": {
+            "description": "Missing/invalid bearer key"
+          },
+          "423": {
+            "description": "Vault locked"
+          }
+        },
+        "parameters": [
+          {
+            "name": "x-keno-vault",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Short-lived unlock token"
+          }
+        ],
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Encrypted document library"
+        ],
+        "summary": "Vault documents",
+        "responses": {
+          "200": {
+            "description": "Successful vault operation"
+          },
+          "401": {
+            "description": "Missing/invalid bearer key"
+          },
+          "423": {
+            "description": "Vault locked"
+          }
+        },
+        "parameters": [
+          {
+            "name": "x-keno-vault",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Short-lived unlock token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VaultImport"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/library/search": {
+      "post": {
+        "tags": [
+          "Encrypted document library"
+        ],
+        "summary": "Vault search",
+        "responses": {
+          "200": {
+            "description": "Successful vault operation"
+          },
+          "401": {
+            "description": "Missing/invalid bearer key"
+          },
+          "423": {
+            "description": "Vault locked"
+          }
+        },
+        "parameters": [
+          {
+            "name": "x-keno-vault",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Short-lived unlock token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VaultQuery"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/library/ask": {
+      "post": {
+        "tags": [
+          "Encrypted document library"
+        ],
+        "summary": "Vault ask",
+        "responses": {
+          "200": {
+            "description": "Successful vault operation"
+          },
+          "401": {
+            "description": "Missing/invalid bearer key"
+          },
+          "423": {
+            "description": "Vault locked"
+          }
+        },
+        "parameters": [
+          {
+            "name": "x-keno-vault",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Short-lived unlock token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VaultQuery"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/library/documents/{document_id}": {
+      "delete": {
+        "tags": [
+          "Encrypted document library"
+        ],
+        "summary": "Vault documents/{document_id}",
+        "responses": {
+          "200": {
+            "description": "Successful vault operation"
+          },
+          "401": {
+            "description": "Missing/invalid bearer key"
+          },
+          "423": {
+            "description": "Vault locked"
+          }
+        },
+        "parameters": [
+          {
+            "name": "x-keno-vault",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Short-lived unlock token"
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/library/documents/{document_id}/download": {
+      "get": {
+        "tags": [
+          "Encrypted document library"
+        ],
+        "summary": "Vault documents/{document_id}/download",
+        "responses": {
+          "200": {
+            "description": "Successful vault operation"
+          },
+          "401": {
+            "description": "Missing/invalid bearer key"
+          },
+          "423": {
+            "description": "Vault locked"
+          }
+        },
+        "parameters": [
+          {
+            "name": "x-keno-vault",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Short-lived unlock token"
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1103,6 +1477,97 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VaultPassword": {
+        "properties": {
+          "password": {
+            "maxLength": 200,
+            "minLength": 12,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "Password",
+        "type": "object"
+      },
+      "VaultImport": {
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "data_base64": {
+            "maxLength": 11200000,
+            "minLength": 1,
+            "title": "Data Base64",
+            "type": "string"
+          },
+          "replace_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Replace Id"
+          },
+          "embed": {
+            "default": true,
+            "title": "Embed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "data_base64"
+        ],
+        "title": "Import",
+        "type": "object"
+      },
+      "VaultQuery": {
+        "properties": {
+          "question": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "document_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "title": "Document Ids",
+            "type": "array"
+          },
+          "mode": {
+            "default": "hybrid",
+            "pattern": "^(hybrid|keyword)$",
+            "title": "Mode",
+            "type": "string"
+          },
+          "max_tokens": {
+            "default": 512,
+            "maximum": 2048,
+            "minimum": 64,
+            "title": "Max Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "Query",
+        "type": "object"
       }
     },
     "securitySchemes": {

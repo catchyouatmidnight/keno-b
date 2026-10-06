@@ -209,7 +209,7 @@ async def headers_and_limits(request: Request, call_next):
         chunks, size = [], 0
         async for chunk in request.stream():
             size += len(chunk)
-            limit = 12_000_000 if request.url.path == "/api/v1/attachments" else 1_000_000
+            limit = 12_000_000 if request.url.path in {"/api/v1/attachments", "/api/v1/library/documents"} else 1_000_000
             if size > limit:
                 return JSONResponse({"detail": "Request body exceeds upload limit"}, status_code=413)
             chunks.append(chunk)
@@ -901,3 +901,6 @@ def backup():
     except BaseException:
         path.unlink(missing_ok=True)
         raise
+
+from . import library
+app.include_router(library.router, dependencies=[Depends(authenticate)])

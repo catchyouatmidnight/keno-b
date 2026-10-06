@@ -354,3 +354,46 @@ With automatic memory enabled, complete statements `I live in Bekasi.`, `Actuall
 Uploaded-file prompts include supplied pages, textless pages, and extracted pages omitted from context. `document_coverage_details` provides this information alongside the existing `document_coverage` label. Specific `page N` queries for a single PDF select that page's extracted chunks and reject out-of-range pages. `citation_check` recognizes explicit uploaded filename/page labels; a label outside supplied sources fails the response before the saved-answer transaction. This is a narrow citation guard, not factual verification; partial streamed output can appear before the normal failure notice, and uncited/implicit claims still require review. Tool-supplied page references are included in the check.
 
 The live evaluation also exercises natural memory correction/deletion, an actual generated PDF with a known date and missing budget, and a small reasoning question. Each inference failure is reported as a failed case rather than discarding the full evaluation report. To inspect your own PDF, run `bash scripts/evaluate.sh --pdf /path/to/document.pdf` (8 MB upload limit). The file is copied temporarily into the container, analyzed by local services in the isolated evaluation database, then removed. The user-PDF result is marked for manual review, not automatically certified. No web lookup is enabled. Generic device-menu answers remain unverified; the advice test checks routing/style only.
+
+## Encrypted document library (optional)
+
+The **Documents** tab is a separate, single-owner persistent RAG vault. Original files, filenames, passages, classifications and vectors are encrypted in SQLite using AES-256-GCM. A random vault key is wrapped with a password-derived scrypt key. Keep the password: there is no recovery. Restart/reload requires unlocking again; idle access expires after 15 minutes.
+
+This is encryption at rest, **not protection against the server operator while unlocked**. Your server reads plaintext to extract/search/answer. Lock drops application references, but does not guarantee forensic erasure from RAM or OS swap. Normal chat attachments, profile, memories and history retain their existing plaintext storage. Use the Documents tab for encrypted documents. Vault answers are transient and are not saved to those tables. API-key holders share one owner; there are no separate user accounts.
+
+```bash
+cd ~/keno-b
+git pull origin main
+bash scripts/backup.sh
+python3 scripts/download-embedding.py
+docker compose --profile library up -d --build --no-deps backend embedding
+docker compose ps backend embedding
+```
+
+Open Documents, set a password (at least 12 characters), then import. Use HTTPS or the existing SSH tunnel. Select documents to narrow a question, or leave unchecked to search all. Replace a document to update its index/version. Re-import a keyword-only document as a replacement with embeddings enabled to add semantic retrieval. Same-content imports are deduplicated. Replacement keeps only the current version; backups may retain encrypted earlier copies.
+
+Embeddings use `@huggingface/transformers` 3.8.1 and **Xenova/multilingual-e5-small**, quantized ONNX on CPU. The downloader fetches public weights at a pinned revision and verifies file hashes; it never reads user documents. Runtime remote loading is disabled and the embedding container only joins the internal Docker network. It uses two inference threads and batches up to 16 passages, with a 768 MB container cap. Check actual memory with `docker stats`. Import builds passage vectors once; search only embeds the question. Keyword mode works without the service. Semantic failures return errors rather than uploading or silently changing retrieval.
+
+Supported: PDF, DOCX, XLSX, PPTX, ODT/ODS/ODP, Markdown, UTF-8 TXT, CSV/TSV, JSON, XML and HTML. Google Docs/Sheets/Slides must first be exported as DOCX/XLSX/PPTX or PDF. Private Google links/shortcuts, legacy DOC/XLS/PPT and arbitrary binary formats are not connected or parsed. Macros, formulas, scripts and external resources never execute. XLSX keeps sheet/cell references; PPTX includes slide text, tables and notes. PDF has page references and local Tesseract OCR for at most 20 pages lacking text (English/Indonesian). OCR can be wrong. Office artwork/charts are not visually interpreted; use a text/PDF export. OpenDocument extraction is text-focused and may lose table layout.
+
+Limits: 8 MB/file, 200,000 extracted characters, 300 passages/document, 50 documents, 2,000 total passages and 96 MB encrypted payloads. ZIP expansion and macro checks bound office extraction. Classification uses format plus a lightweight keyword topic; it is not a semantic guarantee. Laya makes one batched call to choose focused/overview retrieval and quick/deeper effort. It does not create embeddings. Hybrid retrieval combines keyword and cosine-vector ranks. Search scans the bounded decrypted index in RAM; there is no plaintext disk search index.
+
+Focused questions use up to eight passages; overviews sample up to twelve across documents, reduced to fit the LLM context. **An overview is not a complete review of every page.** Answers show coverage, extraction warnings and source excerpts. Citation IDs are validated, not factual correctness. The library currently returns completed answers rather than streaming. Documents are retained as RAG evidence, not automatically converted into personal facts or used for training.
+
+Existing SQLite backups include the encrypted vault and wrapped key. Restore the backup and unlock using the same password. Losing either prevents recovery. Restore validation accepts the complete vault schema alongside existing chat tables. Deletion removes current originals/indexes; backups/WAL may retain encrypted copies. Row IDs and ciphertext sizes remain visible. Avoid payload logging in any added proxy.
+
+Vault API requests use the existing bearer key plus `X-Keno-Vault` for unlocked operations. Setup/unlock return that short-lived token; the UI never persists it or the vault password.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET | `/api/v1/library/status` | Configuration and supported formats |
+| POST | `/api/v1/library/setup` | `{ "password": "your long vault password" }`, once |
+| POST | `/api/v1/library/unlock` | Same body; returns `vault_token` |
+| POST | `/api/v1/library/lock` | Drop the unlocked key |
+| GET / POST | `/api/v1/library/documents` | List / import `{ "name": "notes.md", "data_base64": "...", "embed": true }` |
+| DELETE | `/api/v1/library/documents/{id}` | Delete current document and index |
+| GET | `/api/v1/library/documents/{id}/download` | Decrypt/download original |
+| POST | `/api/v1/library/search` | `{ "question": "...", "document_ids": [], "mode": "hybrid" }` |
+| POST | `/api/v1/library/ask` | Same query; optional `max_tokens` (64–2048) |
+
+For keyword-only operation, import with `embed:false` and query with `mode:"keyword"`. `/ask` still requires local Laya/LLM; keyword `/search` only needs the unlocked vault. Retrieve the runtime API schema from `/api/v1/openapi.json`.
