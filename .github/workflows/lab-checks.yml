@@ -1,7 +1,7 @@
 name: Keno-B Lab checks
 on:
   push:
-    paths: ['web/**', 'app/lab.py', 'app/library.py', 'app/main.py', 'Dockerfile', '.github/workflows/lab-checks.yml']
+    paths: ['web/**', 'tests/**', 'app/lab.py', 'app/library.py', 'app/main.py', 'Dockerfile', '.github/workflows/lab-checks.yml']
   workflow_dispatch:
 jobs:
   frontend:
