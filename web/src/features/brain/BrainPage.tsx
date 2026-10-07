@@ -39,11 +39,11 @@ const activeCenter:Record<Exclude<CognitivePhase,'idle'>,[number,number]>={
  thinking:[510,158],occipital:[710,292],responding:[245,225],memory:[407,352]
 };
 
-function Network({phase,active}:{phase:Exclude<CognitivePhase,'idle'>;active:boolean}){
+function OrbCluster({phase,active}:{phase:Exclude<CognitivePhase,'idle'>;active:boolean}){
  const list=points[phase];
- return <g className={'anatomy-network '+phase+(active?' active':'')}>
-  {list.map((p,i)=>{const q=list[(i+3)%list.length];return <line key={'l'+i} x1={p[0]} y1={p[1]} x2={q[0]} y2={q[1]}/>})}
-  {list.map((p,i)=><circle key={'n'+i} cx={p[0]} cy={p[1]} r={p[2]||4}/>)}
+ return <g className={'orb-cluster '+phase+(active?' active':'')}>
+  {list.map((p,i)=>{const q=list[(i+3)%list.length];return <line key={'l'+i} x1={p[0]} y1={p[1]} x2={q[0]} y2={q[1]}/>)}
+  {list.map((p,i)=><g key={'o'+i} className="brain-orb" style={{'--orb-delay':((i%7)*.11)+'s'} as CSSProperties}><circle className="orb-halo" cx={p[0]} cy={p[1]} r={(p[2]||4)*2.25}/><circle className="orb-body" cx={p[0]} cy={p[1]} r={(p[2]||4)*1.2}/><circle className="orb-shine" cx={p[0]-(p[2]||4)*.35} cy={p[1]-(p[2]||4)*.35} r={Math.max(1,(p[2]||4)*.3)}/></g>)}
  </g>;
 }
 
