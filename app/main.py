@@ -10,6 +10,7 @@ import sqlite3
 import time
 import tempfile
 import uuid
+import shutil
 from contextlib import aclosing, asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,9 +24,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from . import documents, routing, tools, history, agent, response_style, context_policy, calendar_tools, memory_state
+from . import documents, routing, tools, history, agent, response_style, context_policy, calendar_tools, memory_state, skills
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 DB_PATH = Path(os.environ.get("KENO_DB", "data/keno.db"))
 API_KEY = os.environ.get("KENO_API_KEY", "")
 LLM_URL = os.environ.get("LLM_URL", "http://llm:8080").rstrip("/")
@@ -134,6 +135,14 @@ class ToolSettings(StrictModel):
     search_enabled: bool = False
 
 
+class SkillImport(StrictModel):
+    markdown: str = Field(min_length=1, max_length=skills.MAX_MARKDOWN)
+
+
+class SkillToggle(StrictModel):
+    enabled: bool
+
+
 def attachment_rows(conversation_id, ids=None, include_raw=True):
     with db() as c:
         columns = "*" if include_raw else "id,name,kind,pages,characters,created_at"
@@ -166,7 +175,7 @@ def initialize():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with db() as c:
         version = c.execute("PRAGMA user_version").fetchone()[0]
-        if version > 5:
+        if version > 6:
             raise RuntimeError("Database is newer than this backend; refusing downgrade")
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript('''
@@ -207,7 +216,17 @@ def initialize():
           importance REAL NOT NULL, confidence REAL NOT NULL, replaced_at TEXT NOT NULL,
           replacement_request_id TEXT, reason TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS memory_history_key ON memory_history(memory_key,id DESC);
-        PRAGMA user_version=5;
+        CREATE TABLE IF NOT EXISTS skills (
+          id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT NOT NULL,enabled INTEGER NOT NULL,
+          version INTEGER NOT NULL,risk TEXT NOT NULL,triggers TEXT NOT NULL,required_tools TEXT NOT NULL,
+          instructions TEXT NOT NULL,source_markdown TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+          use_count INTEGER NOT NULL DEFAULT 0,last_used_at TEXT);
+        CREATE TABLE IF NOT EXISTS skill_versions (
+          skill_id TEXT NOT NULL,version INTEGER NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL,enabled INTEGER NOT NULL,
+          risk TEXT NOT NULL,triggers TEXT NOT NULL,required_tools TEXT NOT NULL,instructions TEXT NOT NULL,
+          source_markdown TEXT NOT NULL,archived_at TEXT NOT NULL,PRIMARY KEY(skill_id,version));
+        CREATE INDEX IF NOT EXISTS skill_versions_id ON skill_versions(skill_id,version DESC);
+        PRAGMA user_version=6;
         ''')
         for key, value in (("profile", Profile().model_dump()), ("identity", Identity().model_dump()), ("tools", ToolSettings().model_dump())):
             c.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", (key, json.dumps(value)))
@@ -281,6 +300,8 @@ async def lifespan(app):
             legacy_selection.unlink(missing_ok=True)
         except OSError:
             pass
+    app.state.started_at = now()
+    app.state.started_monotonic = time.monotonic()
     app.state.generation_lock = asyncio.Lock()
     app.state.cognitive_subscribers = set()
     app.state.cognitive_started_monotonic = time.monotonic()
@@ -416,6 +437,100 @@ async def put_tool_settings(value: ToolSettings):
     if app.state.generation_lock.locked():
         raise HTTPException(409, "Wait for the active response before changing tool settings")
     return write_setting("tools", value.model_dump())
+
+
+@app.get("/api/v1/skills", dependencies=[Depends(authenticate)])
+def list_skills():
+    with db() as c:
+        return skills.list_skills(c)
+
+
+@app.get("/api/v1/skills/match", dependencies=[Depends(authenticate)])
+def match_skill(q: str = Query(min_length=1, max_length=500)):
+    with db() as c:
+        skill, seconds, candidates = skills.match(c, q)
+    return {"match": skill, "seconds": seconds, "candidates": candidates}
+
+
+@app.post("/api/v1/skills/import", dependencies=[Depends(authenticate)])
+async def import_skill(value: SkillImport):
+    if app.state.generation_lock.locked():
+        raise HTTPException(409, "Wait for the active response before importing skills")
+    try:
+        parsed = skills.validate_tools(skills.parse(value.markdown), tools.SPECS)
+    except skills.SkillError as error:
+        raise HTTPException(422, str(error))
+    with db() as c:
+        return skills.save(c, parsed, now())
+
+
+@app.post("/api/v1/skills/{skill_id}/import", dependencies=[Depends(authenticate)])
+async def update_skill(skill_id: str, value: SkillImport):
+    if app.state.generation_lock.locked():
+        raise HTTPException(409, "Wait for the active response before editing skills")
+    try:
+        parsed = skills.validate_tools(skills.parse(value.markdown, skill_id=skill_id), tools.SPECS)
+    except skills.SkillError as error:
+        raise HTTPException(422, str(error))
+    with db() as c:
+        if skills.get(c, skill_id) is None:
+            raise HTTPException(404, "Skill not found")
+        return skills.save(c, parsed, now())
+
+
+@app.put("/api/v1/skills/{skill_id}/enabled", dependencies=[Depends(authenticate)])
+async def toggle_skill(skill_id: str, value: SkillToggle):
+    if app.state.generation_lock.locked():
+        raise HTTPException(409, "Wait for the active response before changing skills")
+    try:
+        with db() as c:
+            return skills.set_enabled(c, skill_id, value.enabled, now())
+    except skills.SkillError as error:
+        raise HTTPException(404, str(error))
+
+
+@app.get("/api/v1/skills/{skill_id}/history", dependencies=[Depends(authenticate)])
+def skill_history(skill_id: str):
+    with db() as c:
+        if skills.get(c, skill_id) is None:
+            raise HTTPException(404, "Skill not found")
+        return skills.history(c, skill_id)
+
+
+@app.post("/api/v1/skills/{skill_id}/history/{version}/restore", dependencies=[Depends(authenticate)])
+async def restore_skill(skill_id: str, version: int):
+    if app.state.generation_lock.locked():
+        raise HTTPException(409, "Wait for the active response before restoring skills")
+    try:
+        with db() as c:
+            return skills.restore(c, skill_id, version, now())
+    except skills.SkillError as error:
+        raise HTTPException(404, str(error))
+
+
+@app.delete("/api/v1/skills/{skill_id}", dependencies=[Depends(authenticate)])
+async def delete_skill(skill_id: str):
+    if app.state.generation_lock.locked():
+        raise HTTPException(409, "Wait for the active response before deleting skills")
+    with db() as c:
+        if not c.execute("DELETE FROM skills WHERE id=?", (skill_id,)).rowcount:
+            raise HTTPException(404, "Skill not found")
+    return {"deleted": skill_id}
+
+
+@app.get("/api/v1/diagnostics", dependencies=[Depends(authenticate)])
+def diagnostics():
+    usage=shutil.disk_usage(DB_PATH.parent)
+    wal=Path(str(DB_PATH)+"-wal")
+    with db() as c:
+        schema=c.execute("PRAGMA user_version").fetchone()[0]
+        integrity=c.execute("PRAGMA quick_check").fetchone()[0]
+        counts={name:c.execute(f"SELECT count(*) FROM {name}").fetchone()[0] for name in ("conversations","turns","memories","skills")}
+        failures=c.execute("SELECT count(*) FROM turns WHERE status='failed'").fetchone()[0]
+    return {"schema_version":schema,"integrity":integrity,"database_bytes":DB_PATH.stat().st_size if DB_PATH.exists() else 0,
+            "wal_bytes":wal.stat().st_size if wal.exists() else 0,"disk_free_bytes":usage.free,"disk_total_bytes":usage.total,
+            "counts":counts,"failed_turns":failures,"started_at":getattr(app.state,"started_at",None),
+            "uptime_seconds":round(max(0,time.monotonic()-getattr(app.state,"started_monotonic",time.monotonic())),1)}
 
 
 @app.get("/api/v1/attachments/{attachment_id}/pages/{page}", dependencies=[Depends(authenticate)])

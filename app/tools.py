@@ -238,6 +238,20 @@ def catalog(family, settings, message, attachments):
     return [SPECS[n] for n in names]
 
 
+def skill_catalog(names, settings, message, attachments):
+    """Expose only tools declared by the selected user skill and currently allowed by server settings."""
+    chosen=[name for name in dict.fromkeys(names) if name in SPECS]
+    if not attachments:
+        chosen=[name for name in chosen if not name.startswith("document_")]
+    if not settings["weather_enabled"]:
+        chosen=[name for name in chosen if name!="weather"]
+    if not settings["search_enabled"]:
+        chosen=[name for name in chosen if name not in {"web_search","web_inspect"}]
+    if not WRITE_REQUEST.search(message):
+        chosen=[name for name in chosen if name not in {"memory_save","memory_forget","memory_save_result"}]
+    return [SPECS[name] for name in chosen]
+
+
 def calculate(expression):
     if not isinstance(expression, str) or not 1 <= len(expression) <= 200:
         raise ToolValidationError("Expression must contain 1–200 characters")
