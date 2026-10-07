@@ -1008,7 +1008,10 @@ async def fit_context(value, route=None, attachments=None):
     tool_settings = setting("tools")
     definitions = tools.catalog(route.get("tool_family", "none"), tool_settings, value.message, attachments)
     with db() as c:
-        matched_skill, skill_match_seconds, skill_candidates = skills.match(c, value.message)
+        if route.get("tool_policy") == "skill_teach":
+            matched_skill, skill_match_seconds, skill_candidates = None, 0.0, []
+        else:
+            matched_skill, skill_match_seconds, skill_candidates = skills.match(c, value.message)
     active_skill = None
     skill_blocked_tools = []
     skill_confirmation_required = False
@@ -1085,6 +1088,7 @@ async def fit_context(value, route=None, attachments=None):
     relevant_profile = {k: v for k, v in profile.items() if v and (k == "preferences" or (k == "name" and re.search(r"\b(?:name|creator|made you)\b", retrieval_query, re.I)) or (k == "background" and re.search(r"\b(?:my|me|career|work|background)\b", retrieval_query, re.I)))}
     with db() as c:
         recent, older = history.context(c, value.conversation_id, value.message,policy["recent_limit"],policy["older"])
+    trim_events=[]
     while True:
         prefix=system_prompt(selected,bool(attachments),[d['function']['name'] for d in definitions])
         if reply_language:prefix+=f"Reply in {reply_language} until the USER explicitly changes language.\n"
@@ -1149,7 +1153,10 @@ async def fit_context(value, route=None, attachments=None):
                               "context_utilization": round((count + image_reserve + reserved_output + 128) / max(1, limits["context"]), 4),
                               "context_retrieval_seconds": context_retrieval_seconds,
                               "skill_match_seconds": skill_match_seconds, "skill_candidates": skill_candidates,
+                              "context_trim_events": trim_events,
+                              "prompt_cache_strategy": "stable_system_and_history_then_dynamic_skill_reference",
                               "skill": ({k: active_skill[k] for k in ("id","name","version","risk","score","match_reason","required_tools")} if active_skill else None),
+                              "skill_match": ({k: matched_skill[k] for k in ("id","name","version","risk","score","match_reason","required_tools")} if matched_skill else None),
                               "skill_blocked_tools": skill_blocked_tools,
                               "skill_confirmation_required": skill_confirmation_required,
                               "image_token_reserve": image_reserve, "route": route, "thinking_budget": thinking_tokens,
@@ -1166,13 +1173,13 @@ async def fit_context(value, route=None, attachments=None):
                               "visual_sources": visual_sources, "document_coverage": "selected excerpts/pages" if attachments else "none",
                               "document_coverage_details": documents.coverage(attachments, excerpts)}
         if recent:
-            recent.pop(0)
+            recent.pop(0); trim_events.append("recent_history")
         elif selected:
-            selected.pop()
+            selected.pop(); trim_events.append("memory")
         elif older["compact_notes"] or older["relevant_older_excerpts"]:
-            older = {"compact_notes": [], "relevant_older_excerpts": []}
+            older = {"compact_notes": [], "relevant_older_excerpts": []}; trim_events.append("older_history")
         elif excerpts:
-            excerpts.pop()
+            excerpts.pop(); trim_events.append("document_excerpt")
         else:
             raise HTTPException(422, "Message plus profile/personality exceeds context. Shorten them or increase CONTEXT_SIZE.")
 
@@ -1386,12 +1393,14 @@ async def generate(value, messages, metadata, request_started=None, attachments=
         calculation_guarded = metadata.pop("_calculation_reply", None)
         memory_disabled_guarded = "Memory is disabled for this conversation. Enable Memory for this chat before saving or retrieving persistent memories." if metadata.get("route", {}).get("tool_policy") == "memory_disabled" else None
         search_guarded = tools.web_search_reply(session, metadata)
+        skill_teach_guarded = metadata.pop("_skill_teach_reply", None)
         skill_guarded = None
         if metadata.get("skill_confirmation_required"):
-            skill_guarded = "This matched a high-risk reusable skill. Run it explicitly with `run skill " + str((metadata.get("skill") or metadata.get("route", {})).get("name") or metadata.get("route", {}).get("skill_id") or "skill") + "` before I use it."
+            pending = metadata.get("skill_match") or {}
+            skill_guarded = "This matched a high-risk reusable skill. Run it explicitly with `run skill " + str(pending.get("name") or pending.get("id") or "skill") + "` before I use it."
         elif metadata.get("skill_blocked_tools"):
             skill_guarded = "I matched a reusable skill, but its required tool(s) are unavailable right now: " + ", ".join(metadata["skill_blocked_tools"]) + "."
-        guarded = calendar_guarded or calculation_guarded or memory_disabled_guarded or skill_guarded or search_guarded or tools.weather_reply(session, metadata)
+        guarded = calendar_guarded or calculation_guarded or memory_disabled_guarded or skill_teach_guarded or skill_guarded or search_guarded or tools.weather_reply(session, metadata)
         memory_guarded = tools.memory_reply(session, metadata) if guarded is None else None
         if memory_guarded is not None: guarded = memory_guarded
         if guarded is not None: name_guarded = None
@@ -1403,6 +1412,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
                                         "user_name_guard" if name_guarded is not None else
                                         "calculator_tool" if calculation_guarded is not None else
                                         "memory_disabled_guard" if memory_disabled_guarded is not None else
+                                        "skill_teach" if skill_teach_guarded is not None else
                                         "skill_guard" if skill_guarded is not None else
                                         "web_search_guard" if search_guarded is not None else
                                         "memory_guard" if memory_guarded is not None else
@@ -1578,6 +1588,17 @@ async def chat(value: ChatInput):
         previous_route = previous_metadata.get("route", {}) if isinstance(previous_metadata, dict) else {}
         calendar_result = calendar_tools.calculate(value.message,[str(t["user_text"]) for t in prior]) if not attachments else None
         route = deterministic_attachment_route(attachments, value.message, value.execution_mode)
+        taught_skill = None
+        teach_markdown = skills.teach_markdown(value.message) if not attachments else None
+        if teach_markdown:
+            try:
+                parsed_skill = skills.validate_tools(skills.parse(teach_markdown), tools.SPECS)
+            except skills.SkillError as error:
+                app.state.generation_lock.release()
+                raise HTTPException(422, str(error))
+            with db() as c:
+                taught_skill = skills.save(c, parsed_skill, now())
+            route = deterministic_route("skill_teach")
         if route is None and not attachments:
             search_save_query = tools.web_search_and_save(value.message)
             search_query = tools.explicit_web_search(value.message)
@@ -1625,6 +1646,9 @@ async def chat(value: ChatInput):
         if calendar_result is not None:
             metadata["calendar_calculation"] = calendar_result
             metadata["_calendar_reply"] = calendar_tools.render(calendar_result,metadata.get("reply_language"))
+        if taught_skill is not None:
+            metadata["taught_skill"] = {k:taught_skill[k] for k in ("id","name","version","risk","triggers","required_tools")}
+            metadata["_skill_teach_reply"] = "Learned skill " + taught_skill["name"] + " v" + str(taught_skill["version"]) + ". It can now be recognized automatically from its triggers."
         metadata["context_prepare_seconds"] = round(time.monotonic() - prepare_started, 3)
         with db() as c:
             c.execute("INSERT INTO turns(request_id,conversation_id,user_text,status,created_at) VALUES (?,?,?,'running',?) ON CONFLICT(request_id) DO UPDATE SET status='running',assistant_text=NULL,metadata='{}'", (value.request_id, value.conversation_id, value.message, now()))

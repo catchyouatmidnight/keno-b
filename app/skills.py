@@ -2,6 +2,7 @@
 import json
 import re
 import time
+from difflib import SequenceMatcher
 from dataclasses import dataclass
 
 MAX_MARKDOWN = 20_000
@@ -180,15 +181,28 @@ def _score(query, skill):
         if meta_score>best:best,reason=meta_score,"name/description similarity"
     return min(1.0,best),reason
 
+def teach_markdown(text):
+    if not isinstance(text,str): return None
+    match=re.match(r"^\s*(?:teach|learn|import)\s+(?:this\s+as\s+)?(?:a\s+)?skill\s*:\s*(.+)$",text,re.I|re.S)
+    return match.group(1).strip() if match else None
+
 def match(connection, query, threshold=.68):
-    started=time.monotonic(); ranked=[]
-    for row in list_skills(connection):
-        if not row["enabled"]:continue
+    started=time.monotonic(); rows=[row for row in list_skills(connection) if row["enabled"]]
+    explicit_match=re.fullmatch(r"\s*run\s+skill\s+(.+?)\s*[.!]?\s*",query,re.I)
+    if explicit_match:
+        wanted=_norm(explicit_match.group(1))
+        exact=next((row for row in rows if _norm(row["name"])==wanted or _norm(row["id"])==wanted),None)
+        if exact:
+            return {**exact,"score":1.0,"match_reason":"explicit invocation","explicit_invocation":True},round(time.monotonic()-started,6),[{"id":exact["id"],"score":1.0}]
+    ranked=[]
+    for row in rows:
         score,reason=_score(query,row)
+        fuzzy=max((SequenceMatcher(None,_norm(query),_norm(trigger)).ratio() for trigger in row["triggers"]),default=0.0)
+        if fuzzy>=.72 and .62+.28*fuzzy>score:
+            score,reason=.62+.28*fuzzy,"fuzzy trigger"
         if score>0: ranked.append((score,reason,row))
     ranked.sort(key=lambda item:(item[0],item[2]["version"],item[2]["updated_at"]),reverse=True)
     if not ranked or ranked[0][0]<threshold:
         return None,round(time.monotonic()-started,6),[{"id":r["id"],"score":round(s,3)} for s,_,r in ranked[:3]]
     score,reason,skill=ranked[0]
-    explicit=bool(re.fullmatch(r"\s*run\s+skill\s+"+re.escape(_norm(skill["name"]))+r"\s*[.!]?\s*",_norm(query)))
-    return {**skill,"score":round(score,3),"match_reason":reason,"explicit_invocation":explicit},round(time.monotonic()-started,6),[{"id":r["id"],"score":round(s,3)} for s,_,r in ranked[:3]]
+    return {**skill,"score":round(score,3),"match_reason":reason,"explicit_invocation":False},round(time.monotonic()-started,6),[{"id":r["id"],"score":round(s,3)} for s,_,r in ranked[:3]]

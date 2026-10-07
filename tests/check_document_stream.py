@@ -106,6 +106,7 @@ async def run():
           'context_policy': NS(FOLLOWUP=re.compile('tell me more'), is_followup=lambda text: bool(re.search(r'tell me more', text, re.I)),
                                plan=lambda *args: {'mode': 'documents', 'recent_limit': 4, 'older': True}),
           'conversation_memory_enabled': lambda *args: True,
+          'skills': NS(match=lambda *args: (None,0.0,[]), record_use=lambda *args: None),
           'execution_limits': lambda value: {'history': 4, 'thinking_budget': None, 'output': min(value.max_tokens, 2048), 'context': 4096},
           'select_memories': lambda *args: [], 'memory_retrieval_metadata': lambda *args: [],
           'system_prompt': lambda *args: 'Use local evidence.',

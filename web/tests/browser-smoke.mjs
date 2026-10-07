@@ -6,9 +6,12 @@ const server=spawn(process.execPath,['node_modules/vite/bin/vite.js','preview','
 let browser;
 try{
  for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:4173/lab-assets/')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
- browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000}});let requests=0,memoryEnabled=true;const sessions=[],runs=[],results=[];const doc={id:'doc-001',name:'requirements.txt',format:'txt',category:'text',topic:'technical',version:1,passages:1,embedding_model:null,warnings:[],classification:'deterministic',source_bytes:40,section_count:1,indexing_seconds:0,imported_at:'2026-10-06'};const cases=[{id:'case-001',title:'Ordered list',suite:'Rendering',input:'List three colors',setup:[],attachment_ids:[],library_document_ids:[],assertions:[{kind:'contains',value:'Red'}],expected:'Three colors',timeout:30,tags:['rendering'],intent:'fresh'}];
+ browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000}});let requests=0,memoryEnabled=true;const sessions=[],runs=[],results=[];const skills=[{id:'research-brief',name:'Research Brief',description:'Create a grounded research brief.',enabled:true,version:2,risk:'low',triggers:['research brief'],required_tools:['web_search','web_inspect'],instructions:'# Research Brief\nSearch and summarize.',source_markdown:'---\nname: Research Brief\ntriggers:\n  - research brief\nrequires:\n  - web_search\n  - web_inspect\nrisk: low\n---\n# Research Brief\nSearch and summarize.',created_at:'2026-10-07',updated_at:'2026-10-07',use_count:3,last_used_at:null}];const doc={id:'doc-001',name:'requirements.txt',format:'txt',category:'text',topic:'technical',version:1,passages:1,embedding_model:null,warnings:[],classification:'deterministic',source_bytes:40,section_count:1,indexing_seconds:0,imported_at:'2026-10-06'};const cases=[{id:'case-001',title:'Ordered list',suite:'Rendering',input:'List three colors',setup:[],attachment_ids:[],library_document_ids:[],assertions:[{kind:'contains',value:'Red'}],expected:'Three colors',timeout:30,tags:['rendering'],intent:'fresh'}];
  await page.route('**/api/v1/**',async route=>{const request=route.request(),path=new URL(request.url()).pathname.replace('/api/v1',''),method=request.method(),body=request.postDataJSON?.();let data={};
  if(path==='/status')data={backend:'ready',model:'Test local model',model_ready:true,router:'laya',router_ready:true,lookup_ready:true,search_ready:true,embedding_ready:true,generating:false,context_size:4096,version:'test',vision_enabled:false,runtime:{cpu_threads_available:4,ram_bytes:8589934592,quantization:'Q4_K_M'},cognitive:{stage:'idle'}};
+ else if(path==='/diagnostics')data={schema_version:6,integrity:'ok',database_bytes:1048576,wal_bytes:0,disk_free_bytes:8589934592,disk_total_bytes:17179869184,counts:{conversations:2,turns:3,memories:0,skills:skills.length},failed_turns:0,started_at:'2026-10-07T00:00:00Z',uptime_seconds:3600};
+ else if(path==='/skills')data=skills;
+ else if(path==='/skills/match')data={match:{...skills[0],score:.96,match_reason:'exact trigger'},seconds:.0002,candidates:[{id:'research-brief',score:.96}]};
  else if(path==='/profile')data={name:'',background:'',preferences:''};else if(path==='/identity')data={name:'Keno',personality:'Concise',response_examples:''};else if(path==='/tools/settings')data={automatic_memory:true,weather_enabled:false,search_enabled:false};else if(path==='/memories')data=[];else if(path==='/memories/duplicates')data=[];
  else if(path==='/runtime/models')data={installed:[{name:'Test-Q4_K_M.gguf',bytes:123456789,quantization:'Q4_K_M',loaded:true,managed:false}],loaded:'Test-Q4_K_M.gguf',selected:'Test-Q4_K_M.gguf',pending:null,recommendation:{threads:4,context_size:4096,quantization:'Q4_K_M',reason:'test'},activation:'hot'};
  else if(path==='/runtime/model'&&method==='PUT')data={selected:body.name,loaded:body.name,activated:true,restart_required:false};
@@ -109,6 +112,14 @@ try{
  await page.getByText('Service health',{exact:true}).waitFor();
  await page.getByText('Per-model benchmark comparison',{exact:true}).waitFor();
 
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/skills');
+ await page.getByRole('heading',{name:'Skills',exact:true}).waitFor();
+ await page.getByLabel('Test skill match').fill('research brief');
+ await page.getByRole('button',{name:'Test match',exact:true}).click();
+ await page.getByText('Research Brief',{exact:true}).first().waitFor();
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/runtime');
+ await page.getByText('Production diagnostics',{exact:true}).waitFor();
+ await page.getByText('v6',{exact:true}).waitFor();
  await page.goto('http://127.0.0.1:4173/lab-assets/#/documents');
  await page.getByPlaceholder('What should we look for?').fill('Deadline');
  await page.getByRole('button',{name:'Retrieve',exact:true}).click();
@@ -127,7 +138,7 @@ try{
   assert(overflow.scrollWidth<=overflow.width,`playground overflow at ${viewport.name}: ${JSON.stringify(overflow)}`);
   await page.screenshot({path:`artifacts/playground-${viewport.name}.png`,fullPage:true});
  }
- for(const routeName of ['settings','documents']){
+ for(const routeName of ['settings','documents','skills','runtime']){
   await page.setViewportSize({width:1024,height:900});
   await page.goto(`http://127.0.0.1:4173/lab-assets/#/${routeName}`);
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${routeName} overflow at 1024`);
