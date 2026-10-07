@@ -121,3 +121,16 @@ html,body,*{scrollbar-width:none}
  .composer-bottom>.actions:last-child{width:100%;margin-left:0;display:grid;grid-template-columns:minmax(72px,1fr) minmax(72px,1fr) auto auto;gap:6px}
  .composer-bottom>.actions:last-child .ant-select{width:100%;min-width:0}
 }
+
+
+/* ChatGPT-style prompt composer */
+.conversation-pair{width:100%;max-width:860px}
+.composer-box{width:min(860px,calc(100% - 24px));box-sizing:border-box;margin:8px auto 6px;padding:12px 14px 10px;border-radius:22px}
+.composer-box textarea.ant-input{min-height:24px!important;max-height:192px!important;line-height:24px!important;padding:0!important;resize:none!important;overflow-y:auto!important}
+.composer-bottom{margin-top:8px}
+.chat-footnote{width:min(860px,calc(100% - 24px));box-sizing:border-box;margin:0 auto;padding:0 2px 8px}
+@media(max-width:720px){
+ .composer-box{width:calc(100% - 16px);margin:7px auto 5px;padding:10px 12px 9px}
+ .composer-box textarea.ant-input{min-height:24px!important;line-height:24px!important}
+ .chat-footnote{width:calc(100% - 16px);padding:0 2px 8px}
+}
