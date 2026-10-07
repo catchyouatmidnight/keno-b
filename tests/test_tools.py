@@ -786,6 +786,7 @@ def test_response_style_memory_is_deterministic_and_persists_across_topics(clien
     natural=tools.natural_memory(text, {'automatic_memory':True})
     assert natural == ('memory_save', {'key':'user.preference.response_style','quote':text,'category':'preference'})
     main.app.state.laya=fake_router(family='memory')
+    main.app.state.llm=fake_model()
     first_response=send(client,new_conversation(client),request_id='style-save-001',message=text)
     assert first_response.status_code == 200, first_response.text
     first=first_response.json()
