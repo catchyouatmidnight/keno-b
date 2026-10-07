@@ -1,4 +1,4 @@
-import {Button,Card,Checkbox,Collapse,Empty,Input,InputNumber,Modal,Popconfirm,Select,Space,Statistic,Table,Tag,Typography} from 'antd';
+import {Button,Card,Checkbox,Collapse,Empty,Input,InputNumber,Modal,Popconfirm,Select,Space,Statistic,Table,Tag,Typography} from '../../shared/ui';
 import {Download,Play,Plus,Square,Trash2} from 'lucide-react';
 import {Json,exportJson} from '../../components';
 import {percentile,seconds} from '../../metrics.mjs';

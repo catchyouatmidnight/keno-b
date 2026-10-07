@@ -1,4 +1,4 @@
-import {Button,Space,Tag,Tooltip,Typography} from 'antd';
+import {Button,Space,Tag,Tooltip,Typography} from '../../../shared/ui';
 import {Bookmark,Brain,Copy,GitBranch,Hammer,Pencil,RotateCcw,ThumbsDown,ThumbsUp} from 'lucide-react';
 import {Markdown,Sources} from '../../../components';
 import {seconds} from '../../../metrics.mjs';

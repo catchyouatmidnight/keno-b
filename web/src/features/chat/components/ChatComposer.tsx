@@ -1,4 +1,4 @@
-import {Button,Checkbox,Input,Popover,Select,Space,Upload} from 'antd';
+import {Button,Checkbox,Input,Popover,Select,Space,Upload} from '../../../shared/ui';
 import {Paperclip,RotateCcw,Send,Square} from 'lucide-react';
 import type {Doc} from '../../../shared/types';
 import type {ChatAttachment} from '../hooks/useChat';

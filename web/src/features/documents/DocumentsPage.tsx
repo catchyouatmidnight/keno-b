@@ -1,5 +1,5 @@
 import {useNavigate} from 'react-router-dom';
-import {Alert,Button,Card,Checkbox,Descriptions,Empty,Input,Modal,Popconfirm,Select,Space,Table,Tag,Typography,Upload} from 'antd';
+import {Alert,Button,Card,Checkbox,Descriptions,Empty,Input,Modal,Popconfirm,Select,Space,Table,Tag,Typography,Upload} from '../../shared/ui';
 import {Download,FileText,History,MessageSquare,RefreshCcw,RotateCcw,Search,Trash2,Upload as UploadIcon} from 'lucide-react';
 import {Json,Markdown,SourcePreview} from '../../components';
 import {display,seconds} from '../../metrics.mjs';

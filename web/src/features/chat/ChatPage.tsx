@@ -1,4 +1,4 @@
-import {Button,Drawer,Grid,Typography} from 'antd';
+import {Button,Drawer,Grid,Typography} from '../../shared/ui';
 import {ChevronRight,Plus} from 'lucide-react';
 import {Inspector,SourcePreview} from '../../components';
 import {useLab} from '../../app/providers/LabProvider';
