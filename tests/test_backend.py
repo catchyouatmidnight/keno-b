@@ -359,6 +359,73 @@ def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
     assert send(client, conversation, thinking=True).status_code == 422
 
 
+def test_skill_import_match_version_and_chat_activation(client):
+    markdown = """---
+name: Exact Math Workflow
+description: Use the calculator for a repeatable arithmetic workflow.
+triggers:
+  - exact math workflow
+  - calculate with my workflow
+requires:
+  - calculator
+risk: low
+---
+# Exact Math Workflow
+
+Use the calculator tool for the requested arithmetic. Never estimate the result.
+"""
+    imported = client.post('/api/v1/skills/import', json={'markdown': markdown})
+    assert imported.status_code == 200
+    skill = imported.json()
+    assert skill['version'] == 1 and skill['required_tools'] == ['calculator']
+    matched = client.get('/api/v1/skills/match', params={'q':'please use exact math workflow'}).json()
+    assert matched['match']['id'] == skill['id'] and matched['match']['score'] >= .68
+    revised = markdown.replace('Never estimate the result.', 'Return the exact result and keep the answer concise.')
+    updated = client.post('/api/v1/skills/' + skill['id'] + '/import', json={'markdown': revised}).json()
+    assert updated['version'] == 2
+    history_rows = client.get('/api/v1/skills/' + skill['id'] + '/history').json()
+    assert history_rows[0]['version'] == 1
+    seen = []
+    main.app.state.llm = fake_model(seen=seen)
+    main.app.state.laya = fake_router()
+    conversation = new_conversation(client)
+    response = send(client, conversation, request_id='skill-chat-001', message='exact math workflow: calculate 12 * 9').json()
+    assert response['context']['skill']['id'] == skill['id']
+    assert response['context']['available_tools'] == ['calculator']
+    prompt = seen[-1][-1]['content']
+    assert 'Selected reusable skill' in prompt and 'Return the exact result' in prompt
+    listed = client.get('/api/v1/skills').json()[0]
+    assert listed['use_count'] == 1 and listed['last_used_at']
+
+
+def test_skill_tool_validation_and_high_risk_confirmation(client):
+    invalid = client.post('/api/v1/skills/import', json={'markdown': """---
+name: Device Skill
+requires:
+  - phone.flashlight.set
+---
+Do it.
+"""})
+    assert invalid.status_code == 422
+    risky = client.post('/api/v1/skills/import', json={'markdown': """---
+name: Save Workflow
+triggers:
+  - save with workflow
+requires:
+  - memory_save
+risk: high
+---
+Save only the fact explicitly supplied by the current user.
+"""}).json()
+    main.app.state.llm = fake_model()
+    main.app.state.laya = fake_router()
+    conversation = new_conversation(client)
+    guarded = send(client, conversation, request_id='skill-risk-001', message='save with workflow my color is blue').json()
+    assert guarded['context']['skill'] is None
+    assert guarded['context']['skill_confirmation_required'] is True
+    assert 'high-risk reusable skill' in guarded['reply']
+
+
 def test_short_followup_keeps_active_subject_without_extra_model_call(client):
     seen = []
     main.app.state.llm = fake_model(seen=seen)
@@ -499,7 +566,7 @@ def test_v1_backup_migrates_without_resetting_personal_state(client, tmp_path):
     conversation = new_conversation(client)
     with main.db() as db:
         # Simulate the actual v1 schema, not merely a downgraded user_version.
-        for table in ('memory_history', 'response_feedback', 'conversation_preferences', 'memory_meta', 'conversation_summaries', 'attachments'):
+        for table in ('skill_versions', 'skills', 'memory_history', 'response_feedback', 'conversation_preferences', 'memory_meta', 'conversation_summaries', 'attachments'):
             db.execute(f'DROP TABLE {table}')
         db.execute('PRAGMA user_version=1')
     legacy = tmp_path / 'legacy.sqlite3'
@@ -508,7 +575,7 @@ def test_v1_backup_migrates_without_resetting_personal_state(client, tmp_path):
     assert client.get('/api/v1/profile').json()['name'] == 'Zain'
     assert client.get('/api/v1/conversations/' + conversation).status_code == 200
     with main.db() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 5
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 6
         assert db.execute('SELECT count(*) FROM attachments').fetchone()[0] == 0
 
 

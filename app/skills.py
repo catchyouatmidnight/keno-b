@@ -96,6 +96,9 @@ def validate_tools(skill, known_tools):
         raise SkillError("Device/PC capabilities are not enabled in this Keno build")
     if unknown:
         raise SkillError("Unknown required tool(s): "+", ".join(unknown))
+    writes={"memory_save","memory_forget","memory_save_result"}
+    if set(skill["required_tools"]) & writes and skill["risk"]!="high":
+        raise SkillError("Skills that can change persistent memory must use risk: high")
     return skill
 
 def _row(row):
@@ -187,4 +190,5 @@ def match(connection, query, threshold=.68):
     if not ranked or ranked[0][0]<threshold:
         return None,round(time.monotonic()-started,6),[{"id":r["id"],"score":round(s,3)} for s,_,r in ranked[:3]]
     score,reason,skill=ranked[0]
-    return {**skill,"score":round(score,3),"match_reason":reason},round(time.monotonic()-started,6),[{"id":r["id"],"score":round(s,3)} for s,_,r in ranked[:3]]
+    explicit=bool(re.fullmatch(r"\s*run\s+skill\s+"+re.escape(_norm(skill["name"]))+r"\s*[.!]?\s*",_norm(query)))
+    return {**skill,"score":round(score,3),"match_reason":reason,"explicit_invocation":explicit},round(time.monotonic()-started,6),[{"id":r["id"],"score":round(s,3)} for s,_,r in ranked[:3]]
