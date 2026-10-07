@@ -1,0 +1,6 @@
+import {Button,Select,Space,Popconfirm} from 'antd';
+import {Bookmark,Plus,Trash2} from 'lucide-react';
+import type {Session} from '../../../shared/types';
+export function ChatToolbar({sessionId,sessions,busy,memoryEnabled,onSession,onNew,onClear,onMemory,onSaveCase,onDelete}:{sessionId:string;sessions:Session[];busy:boolean;memoryEnabled:boolean;onSession:(id:string)=>void;onNew:()=>void;onClear:()=>void;onMemory:()=>void;onSaveCase:()=>void;onDelete:()=>void}){
+ return <div className="flex items-center gap-2 border-b border-zinc-800 p-3"><Select className="min-w-0 flex-1" value={sessionId||undefined} placeholder="New conversation" disabled={busy} onChange={onSession} options={sessions.map(session=>({value:session.id,label:session.title}))}/><Space size={6}><Button onClick={onNew} disabled={busy} icon={<Plus size={14}/>}>New</Button><Button onClick={onClear} disabled={busy}>Clear view</Button><Button onClick={onMemory} disabled={!sessionId||busy}>{memoryEnabled?'Memory on':'Memory off'}</Button><Button aria-label="Save as benchmark case" onClick={onSaveCase} disabled={busy} icon={<Bookmark size={14}/>}/><Popconfirm title="Delete this session and its messages?" onConfirm={onDelete} disabled={!sessionId||busy}><Button danger aria-label="Delete session" disabled={!sessionId||busy} icon={<Trash2 size={14}/>}/></Popconfirm></Space></div>;
+}
