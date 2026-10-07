@@ -372,7 +372,7 @@ def test_short_followup_keeps_active_subject_without_extra_model_call(client):
     assert third.status_code == 200
     assert third.json()['context']['context_policy'] == 'followup'
     assert third.json()['context']['followup_context'] is True
-    prompt = json.dumps(seen[-1], ensure_ascii=False)
+    prompt = seen[-1][-1]["content"]
     assert '"active_user_request": "turn on the flashlight"' in prompt
     assert '"current_followup": "yea duh"' in prompt
 
