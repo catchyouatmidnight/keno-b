@@ -46,27 +46,27 @@ export default function App(){
   };
  },[query,runs,sessions,docs]);
  const go=(path:string)=>{navigate(path);setCommand(false);setQuery('');};
- const menuItems=navigation.map(({path,label,icon:Icon})=>({key:path,icon:<Icon size={16}/>,label:<NavLink end={path==='/'} to={path}>{label}</NavLink>}));
+ const menuItems=navigation.map(({path,label,icon:Icon})=>({key:path,icon:<Icon size={15}/>,label:<NavLink end={path==='/'} to={path} className="text-xs">{label}</NavLink>}));
  return <Layout className="min-h-screen bg-zinc-950 text-zinc-50">
-  <Layout.Sider width={208} collapsedWidth={64} collapsed={collapsed} trigger={null} theme="dark" className="!fixed inset-y-0 left-0 z-30 hidden border-r border-zinc-800 !bg-zinc-950 lg:block">
-   <div className="flex h-full flex-col px-2 py-5">
-    <div className="flex items-center gap-3 px-2 pb-5"><div className="grid h-9 w-9 place-items-center rounded-lg border border-zinc-800 bg-zinc-900 text-xl font-semibold">k</div>{!collapsed&&<div><Typography.Text strong className="!text-zinc-100">Keno-B Lab</Typography.Text><div className="text-[10px] text-zinc-500">Local intelligence workspace</div></div>}</div>
+  <Layout.Sider width={188} collapsedWidth={56} collapsed={collapsed} trigger={null} theme="dark" className="!fixed inset-y-0 left-0 z-30 hidden border-r border-zinc-800 !bg-zinc-950 lg:block">
+   <div className="flex h-full flex-col px-2 py-4">
+    <div className="flex items-center gap-2 px-2 pb-4"><div className="grid h-8 w-8 place-items-center rounded-md border border-zinc-800 bg-zinc-900 text-base font-semibold">k</div>{!collapsed&&<div><Typography.Text strong className="!text-zinc-100">Keno-B Lab</Typography.Text><div className="text-[10px] text-zinc-500">Local intelligence workspace</div></div>}</div>
     <Menu mode="inline" theme="dark" selectedKeys={[location.pathname]} items={menuItems} className="!border-0 !bg-transparent"/>
     <div className="mt-auto px-3 text-[10px] text-zinc-500">{!collapsed&&<><div className="flex items-center gap-2"><span className={'h-1.5 w-1.5 rounded-full '+(connected?'bg-zinc-100':'bg-zinc-600')}/>{connected?'Backend connected':'Disconnected'}</div><div className="mt-1">Self-hosted · CPU inference</div></>}</div>
    </div>
   </Layout.Sider>
   <Drawer placement="left" width={240} open={drawer} onClose={()=>setDrawer(false)} styles={{body:{padding:8,background:'#09090b'}}}><Menu mode="inline" theme="dark" selectedKeys={[location.pathname]} items={menuItems}/></Drawer>
-  <Layout className={'!bg-zinc-950 transition-[margin] '+(collapsed?'lg:ml-16':'lg:ml-52')}>
-   <div className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-zinc-800 bg-zinc-950/95 px-4 backdrop-blur lg:px-6">
-    <Space size={8}><Button type="text" icon={<PanelLeft size={18}/>} onClick={()=>window.innerWidth<1024?setDrawer(true):setCollapsed(v=>!v)} aria-label="Toggle navigation"/><Typography.Text type="secondary">Workspace</Typography.Text><span className="text-zinc-600">/</span><Typography.Text strong>{page}</Typography.Text></Space>
+  <Layout className={'!bg-zinc-950 transition-[margin] '+(collapsed?'lg:ml-14':'lg:ml-[188px]')}>
+   <div className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-zinc-800 bg-zinc-950/95 px-4 backdrop-blur lg:px-5">
+    <Space size={8}><Button type="text" icon={<PanelLeft size={16}/>} onClick={()=>window.innerWidth<1024?setDrawer(true):setCollapsed(v=>!v)} aria-label="Toggle navigation"/><Typography.Text type="secondary">Workspace</Typography.Text><span className="text-zinc-600">/</span><Typography.Text strong>{page}</Typography.Text></Space>
     <Space size={8} className="min-w-0"><span className="hidden max-w-64 truncate font-mono text-[10px] text-zinc-500 md:block">{status?.model||'Model unavailable'}</span><Tag color={connected?'default':'warning'}>{connected?'Connected':'Disconnected'}</Tag><Button icon={<Search size={14}/>} onClick={()=>setCommand(true)} className="hidden sm:inline-flex">Search</Button></Space>
    </div>
    {error&&<Alert type="error" showIcon closable message={error} afterClose={()=>setError('')} className="!rounded-none"/>}
    {!connected&&location.pathname!=='/settings'&&<Alert type="warning" showIcon message={<span>Backend disconnected. <Button type="link" size="small" onClick={()=>navigate('/settings')}>Configure connection</Button></span>} className="!rounded-none"/>}
-   <Layout.Content className="mx-auto w-full max-w-[1900px] flex-1 p-4 lg:p-6"><Suspense fallback={<div className="grid min-h-52 place-items-center text-zinc-500">Loading workspace…</div>}><Routes>
+   <Layout.Content className="mx-auto w-full max-w-[1900px] flex-1 p-4 lg:p-5"><Suspense fallback={<div className="grid min-h-52 place-items-center text-zinc-500">Loading workspace…</div>}><Routes>
     <Route path="/" element={<Overview/>}/><Route path="/playground" element={<Playground/>}/><Route path="/brain-synapsis" element={<BrainSynapsis/>}/><Route path="/memory" element={<Memory/>}/><Route path="/documents" element={<Documents/>}/><Route path="/benchmarks" element={<Benchmarks/>}/><Route path="/runs" element={<Runs/>}/><Route path="/runtime" element={<Runtime/>}/><Route path="/settings" element={<Settings theme={theme} setTheme={setTheme}/>}/><Route path="*" element={<Overview/>}/>
    </Routes></Suspense></Layout.Content>
-   <Layout.Footer className="!flex !justify-between !gap-4 !border-t !border-zinc-800 !bg-zinc-950 !px-6 !py-3 !text-[10px] !text-zinc-500"><span>Keno-B Lab · {status?.version||'Version unavailable'}</span><span className="hidden sm:block">No external inference, scripts or analytics · <Button type="link" size="small" disabled={!connected} onClick={()=>void refresh()}>Refresh data</Button></span></Layout.Footer>
+   <Layout.Footer className="!flex !justify-between !gap-4 !border-t !border-zinc-800 !bg-zinc-950 !px-5 !py-2.5 !text-[10px] !text-zinc-500"><span>Keno-B Lab · {status?.version||'Version unavailable'}</span><span className="hidden sm:block">No external inference, scripts or analytics · <Button type="link" size="small" disabled={!connected} onClick={()=>void refresh()}>Refresh data</Button></span></Layout.Footer>
   </Layout>
   <Modal title="Search workspace" open={command} onCancel={()=>setCommand(false)} footer={null} destroyOnClose>
    <Input autoFocus prefix={<Search size={15}/>} placeholder="Search pages, runs, sessions or documents…" value={query} onChange={e=>setQuery(e.target.value)}/>

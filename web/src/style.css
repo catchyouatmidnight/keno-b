@@ -24,3 +24,17 @@ button,a,input,textarea{touch-action:manipulation}
 
 
 
+
+
+/* Compact monochrome AntD finish */
+.ant-btn-primary:not(:disabled){background:#fafafa!important;border-color:#fafafa!important;color:#09090b!important;box-shadow:none!important}
+.ant-btn-primary:not(:disabled):hover{background:#e4e4e7!important;border-color:#e4e4e7!important;color:#09090b!important}
+.ant-menu-dark .ant-menu-item-selected,.ant-menu-dark>.ant-menu .ant-menu-item-selected{background:#fafafa!important;color:#09090b!important}
+.ant-menu-dark .ant-menu-item-selected a,.ant-menu-dark .ant-menu-item-selected .anticon,.ant-menu-dark .ant-menu-item-selected svg{color:#09090b!important}
+.ant-menu-inline .ant-menu-item{padding-inline:12px!important}
+.ant-card .ant-card-head{padding-inline:14px}
+.ant-card .ant-card-body{padding:14px}
+.ant-input,.ant-input-affix-wrapper,.ant-select-selector,.ant-input-number{box-shadow:none!important}
+.ant-select-dropdown{border:1px solid #27272a}
+.ant-checkbox-checked .ant-checkbox-inner{background:#fafafa!important;border-color:#fafafa!important}
+.ant-checkbox-checked .ant-checkbox-inner:after{border-color:#09090b!important}
