@@ -1,4 +1,4 @@
-import {Button,Card,Empty,Input,Select,Space,Table,Tag,Typography} from 'antd';
+import {Button,Card,Empty,Input,Select,Space,Table,Tag,Typography} from '../../shared/ui';
 import {Bookmark,Download,RotateCcw} from 'lucide-react';
 import {useNavigate} from 'react-router-dom';
 import {Inspector,Markdown,SourcePreview,exportJson} from '../../components';

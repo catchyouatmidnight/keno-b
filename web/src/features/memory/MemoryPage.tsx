@@ -1,4 +1,4 @@
-import {Button,Card,Checkbox,Empty,Input,Popconfirm,Select,Slider,Space,Tag,Typography} from 'antd';
+import {Button,Card,Checkbox,Empty,Input,Popconfirm,Select,Slider,Space,Tag,Typography} from '../../shared/ui';
 import {History,Merge,RefreshCcw,Save,Search,Trash2} from 'lucide-react';
 import {blankMemory,useMemory} from './hooks/useMemory';
 

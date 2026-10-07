@@ -1,4 +1,4 @@
-import {Button,Card,Empty,Space,Statistic,Table,Tag,Typography} from 'antd';
+import {Button,Card,Empty,Space,Statistic,Table,Tag,Typography} from '../../shared/ui';
 import {useNavigate} from 'react-router-dom';
 import {ResponsiveContainer,LineChart,Line,CartesianGrid,XAxis,YAxis,Tooltip,BarChart,Bar} from 'recharts';
 import {seconds} from '../../metrics.mjs';

@@ -1,4 +1,4 @@
-import {Alert,Button,Card,Checkbox,Input,Select,Space,Tabs,Typography} from 'antd';
+import {Alert,Button,Card,Checkbox,Input,Select,Space,Tabs,Typography} from '../../shared/ui';
 import {Download,RefreshCcw,ServerCog} from 'lucide-react';
 import {Json} from '../../components';
 import {useSettings} from './hooks/useSettings';

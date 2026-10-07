@@ -1,4 +1,4 @@
-import {Collapse,Progress,Table,Tabs,Typography} from 'antd';
+import {Collapse,Progress,Table,Tabs,Typography} from '../ui';
 import {useState} from 'react';
 import {display,number,seconds,stages} from '../../metrics.mjs';
 import type {Context,Source} from '../types';

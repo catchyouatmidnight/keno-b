@@ -1,4 +1,4 @@
-import {Button,Card,Descriptions,Empty,Typography} from 'antd';
+import {Button,Card,Descriptions,Empty,Typography} from '../../shared/ui';
 import {useLab} from '../../app/providers/LabProvider';
 import {Json} from '../../components';
 import {display} from '../../metrics.mjs';
