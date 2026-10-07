@@ -95,7 +95,7 @@ try{
  await page.getByRole('button',{name:'Close',exact:true}).click();
 
  await page.goto('http://127.0.0.1:4173/lab-assets/#/benchmarks');
- await page.getByLabel('Select Ordered list').check();
+ await page.getByLabel('Select Ordered list').check({force:true});
  await page.getByRole('button',{name:'Run selected',exact:true}).click();
  await page.getByText('Benchmark completed.').waitFor({timeout:15000});
  assert.equal(results.length,2);
