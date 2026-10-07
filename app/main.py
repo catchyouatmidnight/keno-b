@@ -337,6 +337,11 @@ def health():
     return {"status": "ok", "version": VERSION}
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=307, headers={"Location": "/lab-assets/favicon.svg"})
+
+
 def system_runtime():
     total = available = None
     try:

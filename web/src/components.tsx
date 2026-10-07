@@ -1,11 +1,20 @@
-import {isValidElement,useEffect,useState,type ReactNode} from 'react';
+import {Children,isValidElement,useEffect,useState,type ReactNode} from 'react';
 import ReactMarkdown from 'react-markdown';
+import {Checkbox as AntCheckbox,Input as AntInput,Select as AntSelect,Slider as AntSlider} from 'antd';
 import remarkGfm from 'remark-gfm';
 import {X,ExternalLink,FileText,Copy} from 'lucide-react';
 import {useLab} from './store';
 import {display,number,seconds,stages,sanitize} from './metrics.mjs';
 import type {Context,Source,Run} from './types';
 export function Button({children,onClick,disabled=false,variant='',type='button',ariaLabel}:{children:ReactNode;onClick?:()=>void;disabled?:boolean;variant?:string;type?:'button'|'submit';ariaLabel?:string}){return <button type={type} aria-label={ariaLabel} className={'button '+variant} onClick={onClick} disabled={disabled}>{children}</button>;}
+export const TextInput=AntInput;
+export const TextArea=AntInput.TextArea;
+export const CheckField=AntCheckbox;
+export const SliderField=AntSlider;
+export function SelectField({children,onChange,...props}:{children?:ReactNode;onChange?:(event:{target:{value:any}})=>void;[key:string]:any}){
+ const options=Children.toArray(children).filter(isValidElement).map(child=>{const option=child.props as {value?:string|number;children?:ReactNode;disabled?:boolean};return {value:option.value??String(option.children??''),label:option.children,disabled:option.disabled};});
+ return <AntSelect {...props} options={options} onChange={(value:any)=>onChange?.({target:{value}})}/>;
+}
 export function Empty({title,children}:{title:string;children?:ReactNode}){return <div className="empty"><FileText size={26}/><h2>{title}</h2><p>{children}</p></div>;}
 export function Json({value}:{value:unknown}){return <pre className="json">{JSON.stringify(sanitize(value),null,2)}</pre>;}
 export function Metric({label,value,note}:{label:string;value:ReactNode;note?:string}){return <div className="metric"><span>{label}</span><strong>{value}</strong>{note&&<small>{note}</small>}</div>;}
