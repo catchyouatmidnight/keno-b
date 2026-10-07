@@ -123,13 +123,19 @@ def test_memory_correction_expiry_and_cross_chat(client):
     client.put("/api/v1/memories/language", json={"key": "language", "content": "English", "pinned": True})
     correction = client.put("/api/v1/memories/language", json={"key": "language", "content": "Indonesian", "pinned": True}).json()
     assert correction["superseded_previous"] is True and correction["history_count"] == 1
-    assert client.get("/api/v1/memory-history/language").json()[0]["content"] == "English"
+    history = client.get("/api/v1/memory-history/language").json()
+    assert history[0]["content"] == "English"
+    restored = client.post(f"/api/v1/memory-history/language/{history[0]['id']}/restore").json()
+    assert restored["content"] == "English" and restored["history_count"] == 2
+    client.put("/api/v1/memories/language", json={"key": "language", "content": "Indonesian", "pinned": True})
     client.put("/api/v1/memories/old", json={"key": "old", "content": "Expired", "pinned": True, "expires_at": "2000-01-01T00:00:00Z"})
     assert len(client.get("/api/v1/memories").json()) == 1
     for index in range(2):
         response = send(client, new_conversation(client), request_id=f"cross-chat-{index}")
         assert response.status_code == 200
         assert response.json()["context"]["memory_keys"] == ["language"]
+    listed = client.get("/api/v1/memories").json()[0]
+    assert listed["retrieval_count"] >= 1 and listed["last_used_at"]
     prompt = "\n".join(m["content"] for m in seen[-1] if isinstance(m["content"], str))
     assert "Indonesian" in prompt and "English" not in prompt and "Expired" not in prompt
     client.delete("/api/v1/memories/language")

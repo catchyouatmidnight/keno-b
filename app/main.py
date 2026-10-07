@@ -459,21 +459,23 @@ def memories(q: str = Query(default="", max_length=200), limit: int = Query(defa
                             WHERE (m.expires_at IS NULL OR m.expires_at>?) AND instr(casefold(m.key || ' ' || m.content), ?) > 0
                             ORDER BY m.pinned DESC, COALESCE(mm.importance,0.5) DESC, m.updated_at DESC LIMIT ?""",
                          (now(), q.casefold(), limit)).fetchall()
-        recent = c.execute("SELECT metadata FROM turns WHERE status='complete' ORDER BY rowid DESC LIMIT 200").fetchall()
+        recent = c.execute("SELECT created_at,metadata FROM turns WHERE status='complete' ORDER BY rowid DESC LIMIT 200").fetchall()
     usage = {}
     for item in recent:
         try:
-            metadata = json.loads(item[0] or "{}")
+            metadata = json.loads(item["metadata"] or "{}")
         except (json.JSONDecodeError, TypeError):
             continue
         for hit in metadata.get("memory_retrieval", []) if isinstance(metadata, dict) else []:
             if not isinstance(hit, dict) or not hit.get("key"):
                 continue
-            state = usage.setdefault(hit["key"], {"retrieval_count": 0, "last_reason": ""})
+            state = usage.setdefault(hit["key"], {"retrieval_count": 0, "last_reason": "", "last_used_at": None})
             state["retrieval_count"] += 1
+            if state["last_used_at"] is None:
+                state["last_used_at"] = item["created_at"]
             if not state["last_reason"]:
                 state["last_reason"] = str(hit.get("reason", ""))[:200]
-    return [{**dict(r), **usage.get(r["key"], {"retrieval_count": 0, "last_reason": ""})} for r in rows]
+    return [{**dict(r), **usage.get(r["key"], {"retrieval_count": 0, "last_reason": "", "last_used_at": None})} for r in rows]
 
 
 @app.put("/api/v1/memories/{key}", dependencies=[Depends(authenticate)])
@@ -501,6 +503,43 @@ async def upsert_memory(key: str, value: MemoryInput):
 def memory_history(key: str, limit: int = Query(default=50, ge=1, le=200)):
     with db() as c:
         return memory_state.history(c, key, limit)
+
+
+@app.post("/api/v1/memory-history/{key}/{history_id}/restore", dependencies=[Depends(authenticate)])
+async def restore_memory_history(key: str, history_id: int):
+    if app.state.generation_lock.locked():
+        raise HTTPException(409, "Wait for the active response before restoring memories")
+    with db() as c:
+        historical = c.execute(
+            """SELECT id,memory_key,content,category,pinned,source_conversation_id,expires_at,
+                      importance,confidence,replaced_at,replacement_request_id,reason
+               FROM memory_history WHERE id=? AND memory_key=?""",
+            (history_id, key),
+        ).fetchone()
+        if historical is None:
+            raise HTTPException(404, "Memory history entry not found")
+        if c.execute("SELECT 1 FROM memories WHERE key=?", (key,)).fetchone() is None:
+            raise HTTPException(404, "Current memory not found")
+        stamp = now()
+        memory_state.archive_if_changed(c, key, historical["content"], stamp, reason="restore")
+        c.execute(
+            """UPDATE memories SET content=?,category=?,pinned=?,source_conversation_id=?,expires_at=?,updated_at=?
+               WHERE key=?""",
+            (historical["content"], historical["category"], historical["pinned"], historical["source_conversation_id"],
+             historical["expires_at"], stamp, key),
+        )
+        c.execute(
+            """INSERT INTO memory_meta(key,importance,confidence) VALUES (?,?,?)
+               ON CONFLICT(key) DO UPDATE SET importance=excluded.importance,confidence=excluded.confidence""",
+            (key, historical["importance"], historical["confidence"]),
+        )
+        row = dict(c.execute(
+            """SELECT m.*,COALESCE(mm.importance,0.5) importance,COALESCE(mm.confidence,0.8) confidence,
+                      (SELECT count(*) FROM memory_history mh WHERE mh.memory_key=m.key) history_count
+               FROM memories m LEFT JOIN memory_meta mm ON mm.key=m.key WHERE m.key=?""",
+            (key,),
+        ).fetchone())
+    return {**row, "restored_from_history_id": history_id}
 
 
 @app.get("/api/v1/memories/duplicates", dependencies=[Depends(authenticate)])
