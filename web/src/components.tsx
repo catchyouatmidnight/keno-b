@@ -11,12 +11,9 @@ export const TextInput=AntInput;
 export const TextArea=AntInput.TextArea;
 export const CheckField=AntCheckbox;
 export const SliderField=AntSlider;
-export function SelectField({children,onChange,onOpenChange,onBlur,onKeyDown,...props}:{children?:ReactNode;onChange?:(event:{target:{value:any}})=>void;onOpenChange?:(open:boolean)=>void;onBlur?:(event:any)=>void;onKeyDown?:(event:any)=>void;[key:string]:any}){
- const [open,setOpen]=useState(false);
- const setPopup=(next:boolean)=>{setOpen(next);onOpenChange?.(next);};
- const closePopup=()=>setPopup(false);
+export function SelectField({children,onChange,...props}:{children?:ReactNode;onChange?:(event:{target:{value:any}})=>void;[key:string]:any}){
  const options=Children.toArray(children).filter(isValidElement).map(child=>{const option=child.props as {value?:string|number;children?:ReactNode;disabled?:boolean};return {value:option.value??String(option.children??''),label:option.children,disabled:option.disabled};});
- return <AntSelect {...props} open={open} options={options} onOpenChange={setPopup} onSelect={closePopup} onChange={(value:any)=>{closePopup();onChange?.({target:{value}});}} onBlur={(event:any)=>{closePopup();onBlur?.(event);}} onKeyDown={(event:any)=>{if(event.key==='Escape')closePopup();onKeyDown?.(event);}}/>;
+ return <AntSelect {...props} options={options} onChange={(value:any)=>onChange?.({target:{value}})}/>;
 }
 export function Empty({title,children}:{title:string;children?:ReactNode}){return <div className="empty"><FileText size={26}/><h2>{title}</h2><p>{children}</p></div>;}
 export function Json({value}:{value:unknown}){return <pre className="json">{JSON.stringify(sanitize(value),null,2)}</pre>;}
