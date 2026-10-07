@@ -17,7 +17,7 @@ try{
  else if(path==='/library/folders')data={folders:[{path:'Projects/Keno',documents:1,depth:2}]};
  else if(path==='/library/documents')data=method==='POST'?doc:[doc];
  else if(path.includes('/library/documents/')&&path.includes('/passages/'))data={text:'Deadline: April 2027.',locator:'text block 1',name:doc.name};
- else if(path==='/library/search')data={mode:'keyword',excerpts:[{document_id:doc.id,name:doc.name,index:0,source_id:'S1',text:'Deadline: April 2027.',locator:'text block 1',rank:1,keyword_matches:1,cosine_similarity:null,fusion_score:0.0164}],coverage:[]};
+ else if(path==='/library/search')data={mode:'keyword',excerpts:[{document_id:doc.id,name:doc.name,index:0,source_id:'S1',text:'Deadline: April 2027.',locator:'text block 1',rank:1,keyword_matches:1,cosine_similarity:null,fusion_score:0.0164}],coverage:[],retrieval:{seconds:0.001,candidate_count:1,ranked_count:1,returned:1,match_strength:1,confidence:1,confidence_kind:'deterministic evidence match strength; not a probability',top_rerank_score:1,top_cosine_similarity:null,top_keyword_matches:1}};
  else if(path==='/conversations'&&method==='POST'){data={id:crypto.randomUUID(),title:body.title,created_at:new Date().toISOString(),turns:[]};sessions.unshift(data);}else if(path==='/conversations')data=sessions;
  else if(path==='/cognitive')return route.fulfill({contentType:'text/event-stream',body:'event: cognitive\ndata: {"stage":"idle","detail":"Waiting","intensity":0}\n\n'});
  else if(path.endsWith('/memory')){if(method==='PUT')memoryEnabled=Boolean(body.enabled);data={enabled:memoryEnabled};}
