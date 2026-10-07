@@ -1,0 +1,35 @@
+import {Button,Card,Checkbox,Collapse,Empty,Input,InputNumber,Modal,Popconfirm,Select,Space,Statistic,Table,Tag,Typography} from 'antd';
+import {Download,Play,Plus,Square,Trash2} from 'lucide-react';
+import {Json,exportJson} from '../../components';
+import {percentile,seconds} from '../../metrics.mjs';
+import type {Case,Result} from '../../shared/types';
+import {freshCase,useBenchmarks,verdict} from './hooks/useBenchmarks';
+export {verdict} from './hooks/useBenchmarks';
+
+export default function BenchmarksPage(){
+ const b=useBenchmarks();
+ const caseColumns=[
+  {title:<Checkbox aria-label="Select all cases" checked={b.cases.length>0&&b.chosen.length===b.cases.length} onChange={e=>b.setChosen(e.target.checked?b.cases.map(item=>item.id):[])}/>,key:'select',width:54,render:(_:unknown,item:Case)=><Checkbox aria-label={'Select '+item.title} checked={b.chosen.includes(item.id)} onChange={e=>b.setChosen(values=>e.target.checked?[...values,item.id]:values.filter(id=>id!==item.id))}/>},
+  {title:'Case',key:'case',render:(_:unknown,item:Case)=><Button type="link" className="!h-auto !p-0" onClick={()=>{const {id,created_at,...rest}=item;b.setEditor(JSON.stringify(rest,null,2));b.setShowEditor(true);}}>{item.title}</Button>},
+  {title:'Suite / intent',key:'suite',render:(_:unknown,item:Case)=><span>{item.suite}<div className="text-[10px] text-zinc-500">{item.intent} · {item.tags.join(', ')}</div></span>},
+  {title:'Checks',key:'checks',render:(_:unknown,item:Case)=>item.assertions.map(value=>value.kind).join(', ')},
+  {title:'Timeout',dataIndex:'timeout',key:'timeout',render:(value:number)=>value+'s'},
+  {title:'',key:'actions',width:60,render:(_:unknown,item:Case)=><Popconfirm title="Delete this case?" onConfirm={()=>void b.remove(item.id)}><Button danger size="small" icon={<Trash2 size={13}/>} disabled={b.busy}/></Popconfirm>},
+ ];
+ const resultColumns=[
+  {title:'Case',key:'case',render:(_:unknown,item:Result)=><span>{item.case?.title||item.case_id}<div className="text-[10px] text-zinc-500">Repeat {item.repetition} · {item.batch_id.slice(0,8)}</div></span>},
+  {title:'Status / behavior',key:'status',render:(_:unknown,item:Result)=><Space><Tag>{item.status}</Tag><span>{verdict(item)===null?'Manual review':verdict(item)?'Passed':'Failed'}</span></Space>},
+  {title:'First token',key:'first',render:(_:unknown,item:Result)=>seconds(item.run?.context.first_token_seconds)},
+  {title:'Total',key:'total',render:(_:unknown,item:Result)=>seconds(item.run?.context.total_seconds)},
+  {title:'Human quality',key:'review',width:160,render:(_:unknown,item:Result)=><Select className="w-28" placeholder="Unrated" value={item.review?.quality||undefined} onChange={value=>void b.review(item.id,value)} options={[1,2,3,4,5].map(value=>({value,label:value+'/5'}))}/>},
+  {title:'Details',key:'details',render:(_:unknown,item:Result)=><Collapse ghost size="small" items={[{key:'details',label:'Inspect',children:<><>{item.error&&<Typography.Text type="danger">{item.error}</Typography.Text>}</><Json value={item}/></>}]} />},
+ ];
+ return <div><div className="mb-6 flex items-center justify-between"><div><Typography.Title level={2} className="!mb-1">Benchmarks</Typography.Title><Typography.Text type="secondary">Behavior checks and measured latency. Manual quality is separate.</Typography.Text></div><Space><Button onClick={()=>void b.seed()} disabled={!b.connected||b.busy}>Add starter suites</Button><Button icon={<Plus size={14}/>} onClick={()=>{b.setEditor(JSON.stringify(freshCase,null,2));b.setShowEditor(true);}}>Case</Button></Space></div>
+  <Card className="!mb-4"><div className="flex flex-wrap items-center gap-3"><span className="text-xs text-zinc-400">Repetitions</span><InputNumber min={1} max={20} value={b.repetitions} onChange={value=>b.setRepetitions(Math.max(1,Math.min(20,Number(value)||1)))} disabled={b.busy}/><span className="text-xs text-zinc-500">Concurrency 1 · backend permits one active generation.</span>{b.busy?<Button icon={<Square size={14}/>} onClick={()=>{b.canceled.current=true;b.control.current?.abort();}}>Cancel</Button>:<Button type="primary" icon={<Play size={14}/>} onClick={()=>void b.run()} disabled={!b.connected||!b.chosen.length}>Run selected</Button>}</div><Collapse ghost className="!mt-2" items={[{key:'fixtures',label:'Document fixtures for starter suites',children:<div className="space-y-2">{b.docs.map(doc=><div key={doc.id}><Checkbox checked={b.fixture.includes(doc.id)} onChange={e=>b.setFixture(items=>e.target.checked?[...items,doc.id].slice(0,4):items.filter(id=>id!==doc.id))}>{doc.name}</Checkbox></div>)}</div>}]} />{b.progress&&<div className="text-xs text-zinc-500">{b.progress}</div>}</Card>
+  <Card className="!mb-5" styles={{body:{padding:0}}}>{b.cases.length?<Table rowKey="id" dataSource={b.cases} columns={caseColumns} pagination={false} scroll={{x:780}}/>:<Empty description="Add starter suites or create a case"/>}</Card>
+  <div className="mb-3 flex flex-wrap items-center justify-between gap-3"><Typography.Title level={4} className="!mb-0">Results</Typography.Title><Space wrap><Select className="min-w-40" value={b.batch} onChange={b.setBatch} options={[{value:'',label:'All loaded batches'},...b.batches.map(value=>({value,label:value.slice(0,8)}))]}/><Select className="min-w-40" value={b.baseline} onChange={b.setBaseline} options={[{value:'',label:'Compare baseline'},...b.batches.filter(value=>value!==b.batch).map(value=>({value,label:value.slice(0,8)}))]}/><Button icon={<Download size={14}/>} onClick={()=>exportJson('keno-benchmarks.json',{results:b.current,baseline:b.old,configuration:b.config})}>Export</Button></Space></div>
+  <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><Card size="small"><Statistic title="Behavior pass rate" value={b.scored.length?b.pass+'/'+b.scored.length:'Unavailable'}/></Card><Card size="small"><Statistic title="Median first token" value={seconds(percentile(b.first,.5))}/><div className="text-[10px] text-zinc-500">Δ {b.delta('first_token_seconds')}</div></Card><Card size="small"><Statistic title="p95 first token" value={seconds(percentile(b.first,.95))}/></Card><Card size="small"><Statistic title="Median total" value={seconds(percentile(b.total,.5))}/><div className="text-[10px] text-zinc-500">Δ {b.delta('total_seconds')}</div></Card><Card size="small"><Statistic title="p95 total" value={seconds(percentile(b.total,.95))}/></Card></div>
+  <Card styles={{body:{padding:0}}}><Table rowKey="id" dataSource={b.current} columns={resultColumns} pagination={{pageSize:20}} scroll={{x:900}}/></Card>
+  <Modal open={b.showEditor} title="Benchmark case" onCancel={()=>b.setShowEditor(false)} onOk={()=>void b.save()} okText="Save case" width={760} confirmLoading={b.busy}><Typography.Paragraph type="secondary">Define input, setup, fixture IDs, expectations, assertions, timeout, tags and session intent as JSON.</Typography.Paragraph><Input.TextArea aria-label="Benchmark case JSON" value={b.editor} onChange={e=>b.setEditor(e.target.value)} autoSize={{minRows:16,maxRows:26}} className="!font-mono !text-xs"/></Modal>
+ </div>;
+}
