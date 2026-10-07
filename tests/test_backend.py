@@ -672,3 +672,12 @@ def test_runtime_model_switch_is_hot_and_does_not_require_docker(client,tmp_path
     state=client.get('/api/v1/runtime/models').json()
     assert state['loaded']==target.name and state['pending'] is None
     assert 'One-click activation' in state['activation']
+
+
+def test_unrelated_query_keeps_preference_but_not_unrelated_fact(client):
+    client.put('/api/v1/memories/style',json={'key':'style','content':'Always end every response with Sir','category':'preference'})
+    client.put('/api/v1/memories/city',json={'key':'city','content':'I live in Bekasi','category':'fact'})
+    selected=main.select_memories('How long does it take to boil an egg?')
+    assert [m['key'] for m in selected] == ['style']
+    prompt=main.system_prompt(selected)
+    assert 'Always end every response with Sir' in prompt

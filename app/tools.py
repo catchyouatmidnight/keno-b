@@ -130,6 +130,23 @@ def explicit_calculation(text):
 
 
 LOCATION = re.compile(r"(?:actually,?\s*)?(?:i live in|i (?:have )?moved to|saya tinggal di|saya pindah ke)\s+([\w][\w '’-]{0,79})[.!]?", re.I)
+RESPONSE_PREFERENCE = re.compile(
+    r"\b(?:always|every\s*time|everytime)\b.{0,160}\b(?:response|reply|answer|respond)\w*\b"
+    r"|\b(?:response|reply|answer|respond)\w*\b.{0,160}\b(?:always|every\s*time|everytime)\b",
+    re.I | re.S,
+)
+
+
+def response_preference(text):
+    """Recognize explicit persistent response-style requests without model planning."""
+    clean = text.strip()
+    if not WRITE_REQUEST.search(clean) or NO_SAVE.search(clean) or FORGET_REQUEST.search(clean):
+        return None
+    if len(clean) > 500 or not RESPONSE_PREFERENCE.search(clean):
+        return None
+    if not re.search(r"\b(?:end|start|call|address|use|say|write|respond|reply|answer|format|style|tone)\b", clean, re.I):
+        return None
+    return {'key': 'user.preference.response_style', 'quote': clean, 'category': 'preference'}
 
 
 def location_fact(text):
@@ -148,6 +165,9 @@ def natural_memory(text, settings):
         return ('memory_forget', {'key': 'user.location', 'quote': text.strip()})
     if not settings['automatic_memory'] or FORGET_REQUEST.search(text):
         return None
+    preference = response_preference(text)
+    if preference:
+        return ('memory_save', preference)
     location = location_fact(text)
     if location:
         return ('memory_save', {'key': 'user.location', 'quote': text.strip().rstrip('.!'), 'category': 'fact'})

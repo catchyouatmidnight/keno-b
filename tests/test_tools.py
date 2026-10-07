@@ -779,3 +779,23 @@ def test_web_result_save_requires_explicit_request_and_tool_evidence(client):
         session.commit(connection)
     stored = client.get('/api/v1/memories?q=launch').json()
     assert any(item['key']=='research.launch_date' and item['category']=='temporary' for item in stored)
+
+
+def test_response_style_memory_is_deterministic_and_persists_across_topics(client):
+    text='I need you to remember this, everytime u response. end your sentence with "Sir"'
+    natural=tools.natural_memory(text, {'automatic_memory':True})
+    assert natural == ('memory_save', {'key':'user.preference.response_style','quote':text,'category':'preference'})
+    main.app.state.laya=fake_router(family='memory')
+    first=send(client,new_conversation(client),request_id='style-save-001',message=text).json()
+    assert first['context']['answer_source']=='memory_guard'
+    saved=client.get('/api/v1/memories').json()
+    assert saved[0]['key']=='user.preference.response_style'
+    seen=[]
+    main.app.state.laya=fake_router(family='none')
+    main.app.state.llm=fake_model(seen=seen,chunks=['Boil for about 7 minutes, Sir.'])
+    second=send(client,new_conversation(client),request_id='style-recall-001',message='how long does it take to boil an egg').json()
+    assert 'user.preference.response_style' in second['context']['memory_keys']
+    assert second['context']['memory_retrieval'][0]['reason']=='persistent preference'
+    system=seen[-1][0]['content']
+    assert 'Persistent USER preferences follow' in system
+    assert text in system
