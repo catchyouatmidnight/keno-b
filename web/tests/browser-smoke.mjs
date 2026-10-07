@@ -27,18 +27,119 @@ try{
  else if(path==='/lab/runs')data={total:runs.length,items:runs};else if(path==='/lab/results'&&method==='GET')data={total:results.length,items:results};else if(path==='/lab/results'){data={id:crypto.randomUUID()};results.unshift({...body,...data,created_at:new Date().toISOString(),case:cases.find(c=>c.id===body.case_id),configuration:{model:'Test local model'},run:runs.find(r=>r.request_id===body.request_id)});}else if(path==='/lab/cases')data=cases;else if(path==='/lab/config')data={model:'Test local model',max_concurrency:1};else if(path==='/lab/snapshots')data={id:'snapshot-001',configuration:{model:'Test local model'}};
  else if(path==='/chat'){requests++;const context={route:{seconds:0,thinking:false,tool_family:'none',decisions:{thinking:{choice:'quick',confidence:0.9}}},first_token_seconds:0,total_seconds:0.4,prompt_tokens:150,tool_seconds:0,generated_tokens:null,document_sources:[{attachment_id:'lib:'+doc.id,library_document_id:doc.id,name:doc.name,page:null,chunk:1,text:'Deadline: April 2027.'}],citation_check:{status:'missing'},history_turns:1};const reply='1. Red\n\n1. Blue\n   - Deep\n   - Light\n\n1. Green';const run={request_id:body.request_id,conversation_id:body.conversation_id,user_text:body.message,assistant_text:reply,status:'complete',created_at:new Date().toISOString(),metadata:JSON.stringify(context),context};runs.unshift(run);sessions.find(s=>s.id===body.conversation_id)?.turns.push(run);return route.fulfill({contentType:'text/event-stream',body:`event: context\ndata: ${JSON.stringify(context)}\n\nevent: delta\ndata: ${JSON.stringify({text:reply})}\n\nevent: done\ndata: ${JSON.stringify({request_id:body.request_id,conversation_id:body.conversation_id,reply,context})}\n\n`});}
  return route.fulfill({contentType:'application/json',body:JSON.stringify(data)});});
- await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');await page.getByLabel('Message Keno').waitFor();assert.equal(await page.locator('.local-greeting').count(),0);assert.equal(requests,0);assert.equal(await page.locator('.topbar').count(),1);await page.goto('http://127.0.0.1:4173/lab-assets/#/brain-synapsis');await page.getByRole('heading',{name:'Brain Synapsis'}).waitFor();assert.equal(await page.locator('.brain-region-card').count(),4);assert.equal(await page.locator('.brain-anatomy .brain-lobe').count(),4);assert.equal(await page.locator('.brain-anatomy .brain-shell').count(),1);await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');
- await page.goto('http://127.0.0.1:4173/lab-assets/#/settings');await page.getByLabel('Server access key').fill('mock-server-access-key');await page.getByRole('button',{name:'Connect',exact:true}).click();await page.getByRole('button',{name:'Disconnect & forget key',exact:true}).waitFor();await page.getByRole('button',{name:'Runtime',exact:true}).click();await page.getByRole('button',{name:'Activate selected model',exact:true}).click();await page.getByText('Activated Test-Q4_K_M.gguf.').waitFor();await page.goto('http://127.0.0.1:4173/lab-assets/#/memory');await page.getByRole('heading',{name:'Memory',exact:true}).first().waitFor();
- await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');assert.equal(await page.locator('.chat-surface').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(24, 24, 27)');assert.equal(await page.locator('.composer-box').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(39, 39, 42)');assert.equal(await page.locator('.composer-bottom .ant-select-selection-item').first().innerText(),'Balanced');assert((await page.locator('.composer-box textarea.ant-input').evaluate(el=>parseFloat(getComputedStyle(el).minHeight)))<=24);assert.equal(await page.locator('.composer-box textarea.ant-input').evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)');assert((await page.locator('.composer-bottom .ant-select').first().evaluate(el=>parseFloat(getComputedStyle(el).height)))>=40);assert.equal(await page.locator('.composer-bottom .ant-select-selector').first().evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)');const modeSelect=page.locator('.composer-bottom .ant-select').first(),lengthSelect=page.locator('.composer-bottom .ant-select').nth(1);await modeSelect.click();let visiblePopups=page.locator('.ant-select-dropdown:visible');assert.equal(await visiblePopups.count(),1);await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText:'Fast'}).click();assert.equal(await page.locator('.composer-bottom .ant-select-selection-item').first().innerText(),'Fast');await page.waitForFunction(()=>document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').length===0);await modeSelect.click();await lengthSelect.click();await page.waitForFunction(()=>document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').length===1);assert.equal(await visiblePopups.count(),1);await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText:'Medium'}).click();assert.equal(await page.locator('.composer-bottom .ant-select-selection-item').nth(1).innerText(),'Medium');await page.waitForFunction(()=>document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').length===0);await modeSelect.click();const popupHolder=page.locator('.ant-select-dropdown:visible .rc-virtual-list-holder').last();assert.equal(await popupHolder.evaluate(el=>getComputedStyle(el).overflowY),'auto');await page.locator('.chat-log').click({position:{x:10,y:10}});await page.waitForFunction(()=>document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').length===0);const composer=page.getByLabel('Message Keno');await composer.fill('Line one');await composer.press('Shift+Enter');await composer.type('Line two');assert.equal(await composer.inputValue(),'Line one\nLine two');await composer.fill('List three colors');await composer.press('Enter');await page.locator('.assistant-actions').waitFor();const composerBox=await page.locator('.composer-box').boundingBox(),conversationBox=await page.locator('.conversation-pair').first().boundingBox();assert(composerBox&&conversationBox&&Math.abs(composerBox.width-conversationBox.width)<2);assert.equal(await page.locator('.conversation-pair .thread-row').count(),2);assert.equal(await page.locator('.assistant-body .markdown').first().evaluate(el=>getComputedStyle(el).fontSize),'14px');assert.equal(await page.locator('.thread-avatar').first().evaluate(el=>getComputedStyle(el).width),'32px');assert.equal(await page.locator('.chat-surface').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(24, 24, 27)');assert.equal(await page.locator('.composer-box').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(39, 39, 42)');assert.equal(requests,1);assert.equal(await page.locator('.markdown ol > li').count(),3);assert.equal(await page.locator('.markdown ol li ul li').count(),2);assert.equal(await page.locator('.markdown ol').evaluate(el=>getComputedStyle(el).listStyleType),'decimal');assert.equal(await page.locator('.sources-collapse').count(),1);await page.getByRole('button',{name:'Mark helpful'}).click();await page.getByRole('button',{name:'Mark helpful'}).evaluate(el=>new Promise((resolve,reject)=>{const done=()=>el.classList.contains('active')?resolve(true):requestAnimationFrame(done);setTimeout(()=>reject(new Error('helpful state did not render')),1000);done();}));await page.getByRole('button',{name:'Memory on'}).click();await page.getByRole('button',{name:'Memory off'}).waitFor();
- await page.getByLabel('Message Keno').fill('Continue');await page.getByRole('button',{name:'Send',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.turn').length===2);assert.equal(runs[0].conversation_id,runs[1].conversation_id);
- await page.getByRole('button',{name:'Metrics',exact:true}).click();await page.getByText('generated_tokens',{exact:true}).waitFor();assert(await page.locator('.inspector').innerText().then(t=>t.includes('null')&&t.includes('0')));
- await mkdir('artifacts',{recursive:true});await page.screenshot({path:'artifacts/playground-desktop.png',fullPage:true});
- await page.getByText('Sources · 1').first().click(); await page.getByRole('button',{name:'requirements.txt',exact:true}).first().click();await page.getByText('Deadline: April 2027.',{exact:true}).waitFor();await page.getByRole('button',{name:'Close',exact:true}).click();
- await page.goto('http://127.0.0.1:4173/lab-assets/#/benchmarks');await page.getByLabel('Select Ordered list').check();await page.getByRole('button',{name:'Run selected',exact:true}).click();await page.getByText('Benchmark completed.').waitFor({timeout:15000});assert.equal(results.length,2);await page.goto('http://127.0.0.1:4173/lab-assets/#/');await page.getByRole('heading',{name:'Home'}).waitFor();await page.getByText('Service health',{exact:true}).waitFor();await page.getByText('Per-model benchmark comparison',{exact:true}).waitFor();
- await page.goto('http://127.0.0.1:4173/lab-assets/#/documents');await page.getByPlaceholder('What should we look for?').fill('Deadline');await page.getByRole('button',{name:'Retrieve',exact:true}).click();await page.getByText('Deadline: April 2027.',{exact:true}).waitFor();
- const stored=await page.evaluate(()=>({...localStorage}));assert.equal(stored['keno.serverAccessKey'],'mock-server-access-key');assert(!JSON.stringify(stored).includes('Deadline'));
- await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');await page.setViewportSize({width:390,height:844});await page.screenshot({path:'artifacts/playground-mobile.png',fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
- await page.reload();await page.getByLabel('Message Keno').waitFor();await page.waitForFunction(()=>!document.querySelector('textarea[aria-label="Message Keno"]')?.disabled);assert.equal(await page.evaluate(()=>localStorage.getItem('keno.serverAccessKey')),'mock-server-access-key');
- await page.goto('http://127.0.0.1:4173/lab-assets/#/settings');await page.getByRole('button',{name:'Disconnect & forget key',exact:true}).click();assert.equal(await page.evaluate(()=>localStorage.getItem('keno.serverAccessKey')),null);await page.reload();await page.getByText('Disconnected.').waitFor();
- console.log('Browser smoke passed: reference-style chat thread, persisted auth with explicit forget, real SSE protocol, session continuity, nested numbering, metrics, source preview, benchmark persistence, retrieval and mobile layout. Tests use explicit mocked API fixtures, not live inference.');
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');
+ await page.getByLabel('Message Keno').waitFor();
+ assert.equal(requests,0);
+ await page.getByText('Workspace',{exact:true}).waitFor();
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/brain-synapsis');
+ await page.getByRole('heading',{name:'Brain Synapsis'}).waitFor();
+ assert.equal(await page.locator('.brain-region-card').count(),4);
+ assert.equal(await page.locator('.brain-anatomy .brain-lobe').count(),4);
+ assert.equal(await page.locator('.brain-anatomy .brain-shell').count(),1);
+
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/settings');
+ await page.getByLabel('Server access key').fill('mock-server-access-key');
+ await page.getByRole('button',{name:'Connect',exact:true}).click();
+ await page.getByRole('button',{name:'Disconnect & forget key',exact:true}).waitFor();
+ await page.getByRole('tab',{name:'Runtime',exact:true}).click();
+ await page.getByRole('button',{name:'Activate selected model',exact:true}).click();
+ await page.getByText('Activated Test-Q4_K_M.gguf.').waitFor();
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/memory');
+ await page.getByRole('heading',{name:'Memory',exact:true}).waitFor();
+
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');
+ const composer=page.getByLabel('Message Keno');
+ const modeSelect=page.getByLabel('Execution mode');
+ const lengthSelect=page.getByLabel('Response length');
+ assert.equal(await modeSelect.locator('.ant-select-selection-item').innerText(),'Balanced');
+ assert.equal(await lengthSelect.locator('.ant-select-selection-item').innerText(),'Short');
+ assert.equal(await composer.evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)');
+ await modeSelect.click();
+ assert.equal(await page.locator('.ant-select-dropdown:visible').count(),1);
+ await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText:'Fast'}).click();
+ assert.equal(await modeSelect.locator('.ant-select-selection-item').innerText(),'Fast');
+ await page.waitForFunction(()=>document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').length===0);
+ await modeSelect.click();
+ await lengthSelect.click();
+ await page.waitForFunction(()=>document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').length===1);
+ assert.equal(await page.locator('.ant-select-dropdown:visible').count(),1);
+ await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText:'Medium'}).click();
+ assert.equal(await lengthSelect.locator('.ant-select-selection-item').innerText(),'Medium');
+ await modeSelect.click();
+ const popupHolder=page.locator('.ant-select-dropdown:visible .rc-virtual-list-holder').last();
+ assert.equal(await popupHolder.evaluate(el=>getComputedStyle(el).overflowY),'auto');
+ await page.getByTestId('chat-log').click({position:{x:10,y:10}});
+ await page.waitForFunction(()=>document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').length===0);
+
+ await composer.fill('Line one');
+ await composer.press('Shift+Enter');
+ await composer.type('Line two');
+ assert.equal(await composer.inputValue(),'Line one\nLine two');
+ await composer.fill('List three colors');
+ await composer.press('Enter');
+ await page.getByText('Red',{exact:false}).waitFor();
+ assert.equal(requests,1);
+ assert.equal(await page.locator('[data-testid="conversation-turn"]').count(),1);
+ const composerBox=await page.getByTestId('chat-composer').boundingBox();
+ const messageColumn=await page.locator('[data-testid="chat-log"] > div').boundingBox();
+ assert(composerBox&&messageColumn&&Math.abs(composerBox.width-messageColumn.width)<2);
+ assert.equal(await page.locator('[data-testid="conversation-turn"] ol > li').count(),3);
+ assert.equal(await page.locator('[data-testid="conversation-turn"] ol li ul li').count(),2);
+ await page.getByRole('button',{name:'Mark helpful'}).click();
+ await page.getByRole('button',{name:'Mark helpful'}).waitFor();
+ await page.getByRole('button',{name:'Memory on'}).click();
+ await page.getByRole('button',{name:'Memory off'}).waitFor();
+
+ await composer.fill('Continue');
+ await page.getByRole('button',{name:'Send',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelectorAll('[data-testid="conversation-turn"]').length===2);
+ assert.equal(runs[0].conversation_id,runs[1].conversation_id);
+ await page.getByRole('tab',{name:'Metrics',exact:true}).click();
+ await page.getByText('generated_tokens',{exact:true}).waitFor();
+ assert(await page.locator('.inspector').innerText().then(text=>text.includes('null')&&text.includes('0')));
+
+ await mkdir('artifacts',{recursive:true});
+ await page.screenshot({path:'artifacts/playground-desktop.png',fullPage:true});
+ await page.getByText('Sources · 1').first().click();
+ await page.getByRole('button',{name:/requirements\.txt/}).first().click();
+ await page.getByText('Deadline: April 2027.',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Close',exact:true}).click();
+
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/benchmarks');
+ await page.getByLabel('Select Ordered list').check();
+ await page.getByRole('button',{name:'Run selected',exact:true}).click();
+ await page.getByText('Benchmark completed.').waitFor({timeout:15000});
+ assert.equal(results.length,2);
+
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/');
+ await page.getByRole('heading',{name:'Home',exact:true}).waitFor();
+ await page.getByText('Service health',{exact:true}).waitFor();
+ await page.getByText('Per-model benchmark comparison',{exact:true}).waitFor();
+
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/documents');
+ await page.getByPlaceholder('What should we look for?').fill('Deadline');
+ await page.getByRole('button',{name:'Retrieve',exact:true}).click();
+ await page.getByText('Deadline: April 2027.',{exact:true}).waitFor();
+
+ const stored=await page.evaluate(()=>({...localStorage}));
+ assert.equal(stored['keno.serverAccessKey'],'mock-server-access-key');
+ assert(!JSON.stringify(stored).includes('Deadline'));
+
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');
+ await page.setViewportSize({width:390,height:844});
+ await page.screenshot({path:'artifacts/playground-mobile.png',fullPage:true});
+ assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+
+ await page.reload();
+ await page.getByLabel('Message Keno').waitFor();
+ await page.waitForFunction(()=>!document.querySelector('textarea[aria-label="Message Keno"]')?.disabled);
+ assert.equal(await page.evaluate(()=>localStorage.getItem('keno.serverAccessKey')),'mock-server-access-key');
+
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/settings');
+ await page.getByRole('button',{name:'Disconnect & forget key',exact:true}).click();
+ assert.equal(await page.evaluate(()=>localStorage.getItem('keno.serverAccessKey')),null);
+ await page.reload();
+ await page.getByText('Disconnected.',{exact:false}).waitFor();
+
+ console.log('Browser smoke passed: AntD/Tailwind feature UI, persisted auth, SSE chat, session continuity, dropdown lifecycle, nested markdown, inspector metrics, source preview, benchmarks, retrieval, and mobile layout.');
 }finally{await browser?.close();server.kill();}
