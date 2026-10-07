@@ -134,3 +134,13 @@ html,body,*{scrollbar-width:none}
  .composer-box textarea.ant-input{min-height:24px!important;line-height:24px!important}
  .chat-footnote{width:calc(100% - 16px);padding:0 2px 8px}
 }
+
+
+/* Shared message/composer column */
+.chat-surface{--chat-column-width:860px;--chat-horizontal-gutter:22px}
+.chat-log{padding-left:var(--chat-horizontal-gutter);padding-right:var(--chat-horizontal-gutter)}
+.conversation-pair{width:100%;max-width:var(--chat-column-width)}
+.composer-box,.chat-footnote{width:min(var(--chat-column-width),calc(100% - (var(--chat-horizontal-gutter) * 2)))}
+@media(max-width:720px){
+ .chat-surface{--chat-horizontal-gutter:10px}
+}
