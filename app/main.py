@@ -1021,9 +1021,11 @@ async def fit_context(value, route=None, attachments=None):
             active_skill = matched_skill
             if matched_skill["required_tools"]:
                 definitions = skill_definitions
-                route.update(tool_family="multiple", tool_policy="skill")
-            else:
-                route.update(tool_policy="skill")
+                route["tool_family"] = "multiple"
+                if route.get("tool_policy") not in {"explicit_calculation","explicit_web_search","web_search_followup","explicit_web_search_and_save"}:
+                    route["tool_policy"] = "skill"
+            elif route.get("tool_policy") not in {"local_calendar","document_evidence_answer"}:
+                route["tool_policy"] = "skill"
             route["skill_id"] = matched_skill["id"]
     if not memory_enabled:
         definitions = [d for d in definitions if not d["function"]["name"].startswith("memory_")]

@@ -364,8 +364,8 @@ def test_skill_import_match_version_and_chat_activation(client):
 name: Exact Math Workflow
 description: Use the calculator for a repeatable arithmetic workflow.
 triggers:
+  - calculate
   - exact math workflow
-  - calculate with my workflow
 requires:
   - calculator
 risk: low
@@ -378,7 +378,7 @@ Use the calculator tool for the requested arithmetic. Never estimate the result.
     assert imported.status_code == 200
     skill = imported.json()
     assert skill['version'] == 1 and skill['required_tools'] == ['calculator']
-    matched = client.get('/api/v1/skills/match', params={'q':'please use exact math workflow'}).json()
+    matched = client.get('/api/v1/skills/match', params={'q':'calculate 12 * 9'}).json()
     assert matched['match']['id'] == skill['id'] and matched['match']['score'] >= .68
     revised = markdown.replace('Never estimate the result.', 'Return the exact result and keep the answer concise.')
     updated = client.post('/api/v1/skills/' + skill['id'] + '/import', json={'markdown': revised}).json()
@@ -389,7 +389,7 @@ Use the calculator tool for the requested arithmetic. Never estimate the result.
     main.app.state.llm = fake_model(seen=seen)
     main.app.state.laya = fake_router()
     conversation = new_conversation(client)
-    response = send(client, conversation, request_id='skill-chat-001', message='exact math workflow: calculate 12 * 9').json()
+    response = send(client, conversation, request_id='skill-chat-001', message='calculate 12 * 9').json()
     assert response['context']['skill']['id'] == skill['id']
     assert response['context']['available_tools'] == ['calculator']
     prompt = seen[-1][-1]['content']
