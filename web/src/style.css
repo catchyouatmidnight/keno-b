@@ -97,3 +97,19 @@ html,body,*{scrollbar-width:none}
 .retrieval .field-stack>.ant-input{margin:0}.retrieval-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}.retrieval-mode{grid-column:1/-1}.retrieval-actions{grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px;padding-top:2px}
 @media(max-width:1150px){.playground-grid{--playground-height:auto;gap:16px}.playground-grid>.chat-surface{height:calc(100dvh - 215px);max-height:none}.playground-grid>.inspector{height:auto;max-height:none;min-height:260px}.brain-hero{height:820px;min-height:820px}}
 @media(max-width:720px){.document-form-grid,.retrieval-controls{grid-template-columns:1fr}.document-import-primary{align-items:flex-start;flex-direction:column}.retrieval-mode{grid-column:auto}.retrieval-actions{grid-column:auto;justify-content:stretch}.retrieval-actions .button{flex:1}.brain-hero{height:800px;min-height:800px}.anatomy-stage{inset:350px 4px 12px}}
+
+
+/* Comfortable controls and composer */
+.ant-input:not(textarea){min-height:40px;padding:8px 11px}
+.ant-select-single{height:40px}
+.ant-select-single .ant-select-selector{height:40px!important;padding:0 11px!important}
+.ant-select-single .ant-select-selection-wrap{min-height:38px;align-items:center}
+.settings-panel label:not(.check){margin:17px 0}
+.field-stack{gap:8px;font-size:11px}
+.composer-box{padding:14px 16px 12px}
+.composer-box textarea.ant-input{background:transparent!important;border:0!important;box-shadow:none!important;padding:2px 0!important;min-height:96px!important;max-height:280px!important}
+.composer-box textarea.ant-input:hover,.composer-box textarea.ant-input:focus{background:transparent!important;border:0!important;box-shadow:none!important}
+.composer-bottom .ant-select{height:34px;min-width:92px}
+.composer-bottom .ant-select .ant-select-selector{height:34px!important;padding:0 8px!important}
+.composer-bottom .ant-select .ant-select-selection-wrap{min-height:32px}
+@media(max-width:720px){.ant-input:not(textarea){min-height:38px}.ant-select-single{height:38px}.ant-select-single .ant-select-selector{height:38px!important}.composer-box textarea.ant-input{min-height:84px!important}}
