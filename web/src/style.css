@@ -144,3 +144,13 @@ html,body,*{scrollbar-width:none}
 @media(max-width:720px){
  .chat-surface{--chat-horizontal-gutter:10px}
 }
+
+
+/* Predictable AntD dropdown behavior */
+.ant-select-dropdown{animation:none!important;transition:none!important}
+.ant-select-dropdown-hidden{display:none!important;pointer-events:none!important}
+.ant-select-dropdown .rc-virtual-list-holder{overflow-y:auto!important;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none}
+.ant-select-dropdown .rc-virtual-list-holder::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}
+.composer-bottom .ant-select .ant-select-selector,
+.composer-bottom .ant-select:hover .ant-select-selector,
+.composer-bottom .ant-select-focused .ant-select-selector{background:transparent!important;border-color:transparent!important;box-shadow:none!important}
