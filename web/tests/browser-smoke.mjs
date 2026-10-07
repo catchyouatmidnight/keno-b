@@ -49,22 +49,22 @@ try{
 
  await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');
  const composer=page.getByLabel('Message Keno');
- const modeSelect=page.getByLabel('Execution mode');
- const lengthSelect=page.getByLabel('Response length');
- assert.equal(await modeSelect.locator('.ant-select-selection-item').innerText(),'Balanced');
- assert.equal(await lengthSelect.locator('.ant-select-selection-item').innerText(),'Short');
+ const modeSelect=page.getByRole('combobox',{name:'Execution mode'});
+ const lengthSelect=page.getByRole('combobox',{name:'Response length'});
+ assert.equal(await modeSelect.locator('xpath=..').locator('..').locator('.ant-select-selection-item').innerText(),'Balanced');
+ assert.equal(await lengthSelect.locator('xpath=..').locator('..').locator('.ant-select-selection-item').innerText(),'Short');
  assert.equal(await composer.evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)');
  await modeSelect.click();
  assert.equal(await page.locator('.ant-select-dropdown:visible').count(),1);
  await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText:'Fast'}).click();
- assert.equal(await modeSelect.locator('.ant-select-selection-item').innerText(),'Fast');
+ assert.equal(await modeSelect.locator('xpath=..').locator('..').locator('.ant-select-selection-item').innerText(),'Fast');
  await page.waitForFunction(()=>document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').length===0);
  await modeSelect.click();
  await lengthSelect.click();
  await page.waitForFunction(()=>document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').length===1);
  assert.equal(await page.locator('.ant-select-dropdown:visible').count(),1);
  await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText:'Medium'}).click();
- assert.equal(await lengthSelect.locator('.ant-select-selection-item').innerText(),'Medium');
+ assert.equal(await lengthSelect.locator('xpath=..').locator('..').locator('.ant-select-selection-item').innerText(),'Medium');
  await modeSelect.click();
  const popupHolder=page.locator('.ant-select-dropdown:visible .rc-virtual-list-holder').last();
  assert.equal(await popupHolder.evaluate(el=>getComputedStyle(el).overflowY),'auto');
