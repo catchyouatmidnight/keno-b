@@ -786,7 +786,9 @@ def test_response_style_memory_is_deterministic_and_persists_across_topics(clien
     natural=tools.natural_memory(text, {'automatic_memory':True})
     assert natural == ('memory_save', {'key':'user.preference.response_style','quote':text,'category':'preference'})
     main.app.state.laya=fake_router(family='memory')
-    first=send(client,new_conversation(client),request_id='style-save-001',message=text).json()
+    first_response=send(client,new_conversation(client),request_id='style-save-001',message=text)
+    assert first_response.status_code == 200, first_response.text
+    first=first_response.json()
     assert first['context']['answer_source']=='memory_guard'
     saved=client.get('/api/v1/memories').json()
     assert saved[0]['key']=='user.preference.response_style'
@@ -797,5 +799,7 @@ def test_response_style_memory_is_deterministic_and_persists_across_topics(clien
     assert 'user.preference.response_style' in second['context']['memory_keys']
     assert second['context']['memory_retrieval'][0]['reason']=='persistent preference'
     system=seen[-1][0]['content']
-    assert 'Persistent USER preferences follow' in system
-    assert text in system
+    current=seen[-1][-1]['content']
+    assert 'Persistent USER preferences' not in system
+    assert 'Persistent USER preferences from memory' in current
+    assert text in current

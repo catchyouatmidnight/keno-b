@@ -679,5 +679,4 @@ def test_unrelated_query_keeps_preference_but_not_unrelated_fact(client):
     client.put('/api/v1/memories/city',json={'key':'city','content':'I live in Bekasi','category':'fact'})
     selected=main.select_memories('How long does it take to boil an egg?')
     assert [m['key'] for m in selected] == ['style']
-    prompt=main.system_prompt(selected)
-    assert 'Always end every response with Sir' in prompt
+    assert 'Always end every response with Sir' not in main.system_prompt(selected)
