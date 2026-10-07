@@ -113,3 +113,11 @@ html,body,*{scrollbar-width:none}
 .composer-bottom .ant-select .ant-select-selector{height:40px!important;padding:0 11px!important}
 .composer-bottom .ant-select .ant-select-selection-wrap{min-height:38px}
 @media(max-width:720px){.ant-input:not(textarea){min-height:38px}.ant-select-single{height:38px}.ant-select-single .ant-select-selector{height:38px!important}.composer-box textarea.ant-input{min-height:84px!important}}
+
+
+/* Mobile composer keeps full-size native AntD selects without horizontal overflow */
+@media(max-width:720px){
+ .composer-bottom{align-items:stretch}
+ .composer-bottom>.actions:last-child{width:100%;margin-left:0;display:grid;grid-template-columns:minmax(72px,1fr) minmax(72px,1fr) auto auto;gap:6px}
+ .composer-bottom>.actions:last-child .ant-select{width:100%;min-width:0}
+}
