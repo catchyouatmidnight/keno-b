@@ -55,7 +55,7 @@ export default function App(){
     <div className="mt-auto px-3 text-[10px] text-zinc-500">{!collapsed&&<><div className="flex items-center gap-2"><span className={'h-1.5 w-1.5 rounded-full '+(connected?'bg-zinc-100':'bg-zinc-600')}/>{connected?'Backend connected':'Disconnected'}</div><div className="mt-1">Self-hosted · CPU inference</div></>}</div>
    </div>
   </Layout.Sider>
-  <Drawer placement="left" width={240} open={drawer} onClose={()=>setDrawer(false)} styles={{body:{padding:8,background:'#09090b'}}><Menu mode="inline" theme="dark" selectedKeys={[location.pathname]} items={menuItems}/></Drawer>
+  <Drawer placement="left" width={240} open={drawer} onClose={()=>setDrawer(false)} styles={{body:{padding:8,background:'#09090b'}}}><Menu mode="inline" theme="dark" selectedKeys={[location.pathname]} items={menuItems}/></Drawer>
   <Layout className={'!bg-zinc-950 transition-[margin] '+(collapsed?'lg:ml-16':'lg:ml-52')}>
    <div className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-zinc-800 bg-zinc-950/95 px-4 backdrop-blur lg:px-6">
     <Space size={8}><Button type="text" icon={<PanelLeft size={18}/>} onClick={()=>window.innerWidth<1024?setDrawer(true):setCollapsed(v=>!v)} aria-label="Toggle navigation"/><Typography.Text type="secondary">Workspace</Typography.Text><span className="text-zinc-600">/</span><Typography.Text strong>{page}</Typography.Text></Space>
