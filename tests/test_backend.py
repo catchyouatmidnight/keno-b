@@ -106,8 +106,12 @@ def test_fresh_install_auth_and_restart(client):
     assert client.get("/api/v1/memories").json() == []
     assert client.get("/api/v1/conversations").json() == []
     assert client.get("/api/v1/profile", headers={"Authorization": "Bearer wrong"}).status_code == 401
-    assert client.get("/").status_code == 200
-    assert "script-src 'self'" in client.get("/").headers["content-security-policy"]
+    response = client.get("/")
+    assert response.status_code == 200
+    csp = response.headers["content-security-policy"]
+    assert "script-src 'self'" in csp
+    assert "script-src 'self' 'unsafe-inline'" not in csp
+    assert "style-src 'self' 'unsafe-inline'" in csp
     client.put("/api/v1/profile", json={"name": "Zain"})
     main.initialize()
     assert client.get("/api/v1/profile").json()["name"] == "Zain"
