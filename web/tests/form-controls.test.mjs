@@ -13,6 +13,7 @@ test('frontend uses local shadcn UI boundaries',async()=>{
   const source=await readFile(file,'utf8'),path=file.pathname,name=path.split('/').pop();
   assert.doesNotMatch(source,/<form\b|<\/form>/i,name+' uses a form element');
   assert.doesNotMatch(source,/from\s*['"]antd['"]/,name+' still imports AntD');
+  assert.doesNotMatch(source,/\.ant-[a-z0-9_-]+/i,name+' still contains AntD-specific selectors');
   if(!path.includes('/shared/ui/'))assert.doesNotMatch(source,/<(?:input|select|textarea)\b/,name+' bypasses shared shadcn UI primitives');
  }
 });
