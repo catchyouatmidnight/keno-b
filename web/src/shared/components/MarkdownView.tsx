@@ -1,4 +1,4 @@
-import {Button,Collapse,Space,Tag} from 'antd';
+import {Button,Collapse,Space,Tag} from '../ui';
 import {Copy,ExternalLink,FileText} from 'lucide-react';
 import {isValidElement,type ReactNode} from 'react';
 import ReactMarkdown from 'react-markdown';

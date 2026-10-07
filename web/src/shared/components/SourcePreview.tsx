@@ -1,4 +1,4 @@
-import {Alert,Modal,Spin,Typography} from 'antd';
+import {Alert,Modal,Spin,Typography} from '../ui';
 import {useEffect,useState} from 'react';
 import {useLab} from '../../app/providers/LabProvider';
 import type {Source} from '../types';
