@@ -1,0 +1,13 @@
+import {useMemo,useState} from 'react';
+import {useLab} from '../../../app/providers/LabProvider';
+import {number} from '../../../metrics.mjs';
+import type {Run,Source} from '../../../shared/types';
+export function useRuns(){
+ const lab=useLab();const [query,setQuery]=useState(''),[status,setStatus]=useState(''),[session,setSession]=useState(''),[family,setFamily]=useState(''),[effort,setEffort]=useState(''),[documents,setDocuments]=useState(''),[thinking,setThinking]=useState(''),[latency,setLatency]=useState(''),[date,setDate]=useState(''),[model,setModel]=useState(''),[suite,setSuite]=useState(''),[selected,setSelected]=useState<Run|null>(null),[compare,setCompare]=useState<Run|null>(null),[source,setSource]=useState<Source|null>(null);
+ const requested=new URLSearchParams(location.hash.split('?')[1]||'').get('request'),recorded=(run:Run)=>lab.results.find(result=>result.request_id===run.request_id);
+ const models=[...new Set(lab.results.map(r=>r.configuration?.model).filter((m):m is string=>typeof m==='string'))],suites=[...new Set(lab.results.map(r=>r.case?.suite).filter((s):s is string=>!!s))];
+ const list=useMemo(()=>lab.runs.filter(r=>(!query||(r.user_text+' '+(r.assistant_text||'')+' '+r.request_id).toLowerCase().includes(query.toLowerCase()))&&(!status||r.status===status)&&(!session||r.conversation_id===session)&&(!family||r.context.route?.tool_family===family)&&(!effort||r.context.route?.effort_policy===effort)&&(!documents||(documents==='yes')===!!r.context.document_sources?.length)&&(!thinking||(thinking==='true')===r.context.route?.thinking)&&(!latency||(number(r.context.first_token_seconds)!==null&&Number(r.context.first_token_seconds)>=Number(latency)))&&(!date||r.created_at.slice(0,10)===date)&&(!model||recorded(r)?.configuration?.model===model)&&(!suite||recorded(r)?.case?.suite===suite)),[lab.runs,lab.results,query,status,session,family,effort,documents,thinking,latency,date,model,suite]);
+ const active=selected||lab.runs.find(r=>r.request_id===requested)||null;
+ async function saveCase(run:Run){const title=prompt('Benchmark title',run.user_text.slice(0,80));if(!title)return;try{await lab.api.post('/lab/cases',{title,suite:'Custom',input:run.user_text,setup:[],attachment_ids:[],expected:'Manual review',assertions:[{kind:'manual',value:''}],timeout:180,tags:['saved-from-run'],intent:'fresh'});await lab.refresh();}catch(error){lab.setError((error as Error).message);}}
+ return {...lab,query,setQuery,status,setStatus,session,setSession,family,setFamily,effort,setEffort,documents,setDocuments,thinking,setThinking,latency,setLatency,date,setDate,model,setModel,suite,setSuite,selected,setSelected,compare,setCompare,source,setSource,models,suites,list,active,saveCase};
+}
