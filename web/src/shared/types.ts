@@ -13,3 +13,7 @@ export interface Result {review?:{quality:number;note:string}|null;id:string;bat
 export interface LibraryStatus {ready:boolean;configured:boolean;detail:string|null;formats:string[];encryption:string;manual_unlock:boolean}
 export interface ChatRequest {conversation_id:string;message:string;request_id:string;stream:true;max_tokens:number;execution_mode?:'fast'|'balanced'|'deep';attachment_ids:string[];library_document_ids?:string[]}
 export interface ChatResult {request_id:string;conversation_id:string;reply:string;context:Context}
+
+export interface Skill {id:string;name:string;description:string;enabled:boolean;version:number;risk:'low'|'medium'|'high';triggers:string[];required_tools:string[];instructions:string;source_markdown:string;created_at:string;updated_at:string;use_count:number;last_used_at:string|null;score?:number;match_reason?:string}
+export interface SkillMatch {match:Skill|null;seconds:number;candidates:Array<{id:string;score:number}>}
+export interface Diagnostics {schema_version:number;integrity:string;database_bytes:number;wal_bytes:number;disk_free_bytes:number;disk_total_bytes:number;counts:Record<string,number>;failed_turns:number;started_at:string|null;uptime_seconds:number}
