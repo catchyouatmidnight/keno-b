@@ -36,6 +36,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
+      - run: python -m py_compile scripts/profile_latency.py
       - run: python tests/check_lab_storage.py
       - run: python tests/check_document_stream.py
       - run: python tests/check_context_policy.py
