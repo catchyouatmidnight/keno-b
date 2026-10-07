@@ -114,10 +114,23 @@ try{
  assert.equal(stored['keno.serverAccessKey'],'mock-server-access-key');
  assert(!JSON.stringify(stored).includes('Deadline'));
 
- await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');
+ const viewports=[{width:390,height:844,name:'390'},{width:768,height:900,name:'768'},{width:1024,height:900,name:'1024'},{width:1440,height:1000,name:'1440'},{width:1920,height:1080,name:'1920'},{width:2560,height:1080,name:'2560'}];
+ for(const viewport of viewports){
+  await page.setViewportSize({width:viewport.width,height:viewport.height});
+  await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');
+  await page.getByLabel('Message Keno').waitFor();
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`playground overflow at ${viewport.name}`);
+  await page.screenshot({path:`artifacts/playground-${viewport.name}.png`,fullPage:true});
+ }
+ for(const routeName of ['settings','documents']){
+  await page.setViewportSize({width:1024,height:900});
+  await page.goto(`http://127.0.0.1:4173/lab-assets/#/${routeName}`);
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${routeName} overflow at 1024`);
+  await page.setViewportSize({width:1920,height:1080});
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${routeName} overflow at 1920`);
+ }
  await page.setViewportSize({width:390,height:844});
- await page.screenshot({path:'artifacts/playground-mobile.png',fullPage:true});
- assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');
 
  await page.reload();
  await page.getByLabel('Message Keno').waitFor();
@@ -130,5 +143,5 @@ try{
  await page.reload();
  await page.getByText('Disconnected.',{exact:false}).waitFor();
 
- console.log('Browser smoke passed: AntD/Tailwind feature UI, persisted auth, SSE chat, session continuity, dropdown lifecycle, nested markdown, inspector metrics, source preview, benchmarks, retrieval, and mobile layout.');
+ console.log('Browser smoke passed: local UI, persisted auth, SSE chat, session continuity, nested markdown, inspector metrics, source preview, benchmarks, retrieval, and responsive layouts from 390px to 2560px.');
 }finally{await browser?.close();server.kill();}
