@@ -12,7 +12,7 @@ test('frontend architecture uses AntD controls without forms or native form elem
  for(const file of await files(root)){
   const source=await readFile(file,'utf8'),name=file.pathname.split('/').pop();
   assert.doesNotMatch(source,/<form\b|<\/form>/i,name+' uses a form element');
-  assert.doesNotMatch(source,/<(?:input|select|textarea)\b/i,name+' uses a native form control');
+  assert.doesNotMatch(source,/<(?:input|select|textarea)\b/,name+' uses a native form control');
   assert.doesNotMatch(source,/import\s*\{[^}]*\bForm\b[^}]*\}\s*from\s*['"]antd['"]/,name+' imports AntD Form');
   assert.doesNotMatch(source,/\b(?:TextInput|SelectField|CheckField|SliderField)\b/,name+' uses a retired UI wrapper');
  }
