@@ -360,6 +360,7 @@ def test_document_sources_attachment_isolation_and_backup(client, tmp_path):
     assert response.status_code == 200
     context = response.json()['context']
     assert any(source['page'] == 2 for source in context['document_sources'])
+    assert any('Profit is 42' in source['text'] for source in context['document_sources'])
     assert context['document_coverage'] == 'selected excerpts/pages'
     payload = [p for path, p in calls if path == '/v1/chat/completions'][-1]
     assert 'Profit is 42' in payload['messages'][-1]['content']

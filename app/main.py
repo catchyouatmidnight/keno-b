@@ -953,6 +953,7 @@ async def fit_context(value, route=None, attachments=None):
                               "memory_enabled": memory_enabled, "memory_retrieval": memory_retrieval,
                               "attachment_ids": [a["id"] for a in attachments],
                               "document_sources": [{**{k: c[k] for k in ("attachment_id", "name", "page", "chunk")},
+                                  "text": c["text"],
                                   **({"library_document_id": c["attachment_id"][4:]} if c["attachment_id"].startswith("lib:") else {})} for c in excerpts],
                               "visual_sources": visual_sources, "document_coverage": "selected excerpts/pages" if attachments else "none",
                               "document_coverage_details": documents.coverage(attachments, excerpts)}
