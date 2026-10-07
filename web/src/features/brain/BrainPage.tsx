@@ -55,7 +55,7 @@ function BrainMap({active,intensity}:{active:CognitivePhase;intensity:number}){
   <svg className="brain-anatomy" viewBox="0 0 900 560" role="img" aria-label="Animated brain-shaped cognitive activity map">
    <defs>
     <filter id="softGlow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="7" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    <filter id="nodeGlow" x="-150%" y="-150%" width="400%" height="400%"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="nodeGlow" x="-150%" y="-150%" width="400%" height="400%"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter><radialGradient id="orbFill" cx="32%" cy="28%" r="74%"><stop offset="0%" stopColor="#fff"/><stop offset="22%" stopColor="#d4d4d8"/><stop offset="62%" stopColor="#71717a"/><stop offset="100%" stopColor="#27272a"/></radialGradient>
     <clipPath id="brainClip"><path d={outlines.brain}/></clipPath>
    </defs>
    <g className="brain-silhouette">
@@ -69,10 +69,10 @@ function BrainMap({active,intensity}:{active:CognitivePhase;intensity:number}){
     {folds.map((d,i)=><path className="brain-fold" d={d} key={i}/>)}
    </g>
    <g clipPath="url(#brainClip)">
-    <Network phase="responding" active={live==='responding'}/>
-    <Network phase="thinking" active={live==='thinking'}/>
-    <Network phase="memory" active={live==='memory'}/>
-    <Network phase="occipital" active={live==='occipital'}/>
+    <OrbCluster phase="responding" active={live==='responding'}/>
+    <OrbCluster phase="thinking" active={live==='thinking'}/>
+    <OrbCluster phase="memory" active={live==='memory'}/>
+    <OrbCluster phase="occipital" active={live==='occipital'}/>
     <path className="cross-synapse" d="M232 226 C335 178 445 169 548 177 S684 235 714 292"/>
     <path className="cross-synapse" d="M302 361 C400 325 490 314 650 302"/>
     <path className="cross-synapse" d="M298 148 C382 226 445 287 479 388"/>
@@ -96,8 +96,6 @@ function BrainMap({active,intensity}:{active:CognitivePhase;intensity:number}){
   </svg>
  </div>;
 }
-
-function stagePhase(stage:string):CognitivePhase{return stage==='reasoning'||stage==='route_started'||stage==='tool'?'thinking':stage==='retrieval'||stage==='vision'?'occipital':stage==='memory_search'||stage==='memory_save'?'memory':stage==='generation'?'responding':'idle';}
 
 export default function BrainPage(){
  const {phase,live,cognitive,elapsed,visualPulse,latest}=useBrainSynapsis();

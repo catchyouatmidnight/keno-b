@@ -72,6 +72,10 @@ try{
  const composerBox=await page.getByTestId('chat-composer').boundingBox();
  const messageColumn=await page.locator('[data-testid="chat-log"] > div').boundingBox();
  assert(composerBox&&messageColumn&&Math.abs(composerBox.width-messageColumn.width)<2);
+ assert.equal(await composer.evaluate(el=>getComputedStyle(el).outlineStyle),'none');
+ const chatPanel=await page.locator('[data-testid="chat-composer"]').locator('xpath=ancestor::div[contains(@class,"h-[calc(100dvh-212px)]")]').boundingBox();
+ const inspectorPanel=await page.getByTestId('desktop-inspector').boundingBox();
+ assert(chatPanel&&inspectorPanel&&Math.abs(chatPanel.height-inspectorPanel.height)<2);
  assert.equal(await page.locator('[data-testid="conversation-turn"] ol > li').count(),3);
  assert.equal(await page.locator('[data-testid="conversation-turn"] ol li ul li').count(),2);
  await page.getByRole('button',{name:'Mark helpful'}).click();

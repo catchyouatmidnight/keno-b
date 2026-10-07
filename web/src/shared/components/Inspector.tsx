@@ -26,5 +26,5 @@ export function Inspector({context,events=[],raw,browserSeconds,onSource}:{conte
   {key:'Sources',label:'Sources',children:<div className="p-3"><Sources context={context} onSource={onSource}/><div className="mt-3"><JsonView value={{coverage:context.document_coverage_details,citation_check:context.citation_check,web_verification:context.web_verification}}/></div></div>},
   {key:'Raw',label:'Raw',children:<div className="p-3"><JsonView value={raw??context}/></div>},
  ];
- return <div className="inspector h-full min-h-[520px] overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900/70"><Tabs activeKey={tab} onChange={setTab} items={items}/></div>;
+ return <div className="inspector h-full min-h-0 overflow-y-auto overscroll-contain rounded-lg border border-zinc-800 bg-zinc-900/70"><Tabs activeKey={tab} onChange={setTab} items={items}/></div>;
 }
