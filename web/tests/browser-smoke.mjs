@@ -79,7 +79,8 @@ try{
  assert.equal(await composer.inputValue(),'Line one\nLine two');
  await composer.fill('List three colors');
  await composer.press('Enter');
- await page.getByText('Red',{exact:false}).waitFor();
+ await page.getByText('Red',{exact:true}).waitFor();
+ await page.waitForFunction(()=>document.querySelectorAll('[data-testid="conversation-turn"]').length===1);
  assert.equal(requests,1);
  assert.equal(await page.locator('[data-testid="conversation-turn"]').count(),1);
  const composerBox=await page.getByTestId('chat-composer').boundingBox();
