@@ -359,6 +359,24 @@ def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
     assert send(client, conversation, thinking=True).status_code == 422
 
 
+def test_short_followup_keeps_active_subject_without_extra_model_call(client):
+    seen = []
+    main.app.state.llm = fake_model(seen=seen)
+    main.app.state.laya = fake_router()
+    conversation = new_conversation(client)
+    first = send(client, conversation, request_id='followup-anchor-001', message='turn on the flashlight')
+    assert first.status_code == 200
+    second = send(client, conversation, request_id='followup-anchor-002', message='yea')
+    assert second.status_code == 200
+    third = send(client, conversation, request_id='followup-anchor-003', message='yea duh')
+    assert third.status_code == 200
+    assert third.json()['context']['context_policy'] == 'followup'
+    assert third.json()['context']['followup_context'] is True
+    prompt = json.dumps(seen[-1], ensure_ascii=False)
+    assert '"active_user_request": "turn on the flashlight"' in prompt
+    assert '"current_followup": "yea duh"' in prompt
+
+
 def test_document_sources_attachment_isolation_and_backup(client, tmp_path):
     calls = []
     main.app.state.llm = fake_model(calls=calls)

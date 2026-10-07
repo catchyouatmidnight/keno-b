@@ -18,6 +18,9 @@ assert policy.plan('how are u',['Project Orchid budget is 7402'])['older'] is Fa
 assert policy.plan('how long does it take to boil an egg',['My name is Zain'])['recent_limit']==0
 assert policy.plan('do that',['Please explain the plan'])['recent_limit']==4
 assert policy.plan('repeat that again',['What is my name?'])['recent_limit']==4
+assert policy.plan('yea duh',['turn on the flashlight'])['recent_limit']==4
+assert policy.plan('of course',['turn on the flashlight'])['recent_limit']==4
+assert policy.plan('nah',['Should I continue?'])['recent_limit']==4
 assert policy.plan('What is the Orchid budget?',['Project Orchid budget is 7402'])['recent_limit']==2
 assert policy.plan('What did we discuss earlier?',[])['older'] is True
 assert policy.language_choice('can u speak indonesian') is None
@@ -48,6 +51,8 @@ node=next(n for n in source.body if isinstance(n,ast.FunctionDef) and n.name=='s
 system_scope={'setting':lambda name:{'name':'Keno','personality':'Concise.','response_examples':''}}
 exec(compile(ast.Module(body=[node],type_ignores=[]),'main.py','exec'),system_scope)
 f=system_scope['system_prompt'];base=f([])
-assert len(base)<900 and 'user.name' not in f([{'key':'user.name','content':'Zain'}])
+assert len(base)<1200 and 'user.name' not in f([{'key':'user.name','content':'Zain'}])
+assert 'Never imply you can control a device' in base
+assert 'brief acknowledgements or elliptical replies' in base
 assert f([],available_tools=['calculator'])==f([],available_tools=['memory_save'])
 print('Routine/standalone trimming, follow-up relevance, legacy language recovery, durable language choice, isolation and compact stable-prefix checks passed.')

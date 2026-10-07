@@ -5,6 +5,7 @@ from .documents import QUERY_STOP_WORDS
 FOLLOWUP=re.compile(r'\s*(?:do that|do it|calculate (?:it|that)|go ahead|yes please|hitung itu|lakukan itu|which is|who is that|who exactly|what about that|tell me more|expand on that|explain further|continue|repeat(?: that)?(?: again)?|say that again|make it shorter|shorter|translate that|rewrite that|in Indonesian|in English|yea switch|yeah switch|why|how so|yes|yeah|yea|yep|ok|okay|lanjut|ulangi|kenapa)\s*[?.!]*',re.I)
 ROUTINE=re.compile(r'\s*(?:hello|hi|hey|halo|hai|testing|test|how are (?:you|u)|apa kabar|thanks|thank you|terima kasih)\s*[?.!]*',re.I)
 FOLLOWUP_PREFIX=re.compile(r"^\s*(?:and|what about|how about|also|then|but|dan|kalau|lalu|i mean|i meant|actually|no[, ]|it was|that was|this was|they were|he was|she was)\b",re.I)
+ACK_FOLLOWUP=re.compile(r"\s*(?:yes|yeah|yea|yep|yup|sure|ok|okay|right|correct|exactly|of course|obviously|duh|nope|nah)(?:[\s,]+(?:please|sure|duh|obviously|of course|go ahead|go on|then|now|lol|haha|man|bro))*\s*[?.!]*",re.I)
 REFERENTIAL_FOLLOWUP=re.compile(r"^\s*(?:the\s+(?:final|match|game|result|score)|it|that|this|those|these)\b",re.I)
 PAST=re.compile(r'\b(?:earlier|previously|last time|previous conversation|old chat|before|sebelumnya|tadi)\b',re.I)
 STOP=QUERY_STOP_WORDS|{'hello','hi','hey','testing','test','can','do','does','u','please','help'}
@@ -14,7 +15,7 @@ def words(text):return set(re.findall(r'\w+',text.casefold()))-STOP
 
 
 def is_followup(query):
-    return bool(FOLLOWUP.fullmatch(query) or FOLLOWUP_PREFIX.search(query) or REFERENTIAL_FOLLOWUP.search(query))
+    return bool(FOLLOWUP.fullmatch(query) or ACK_FOLLOWUP.fullmatch(query) or FOLLOWUP_PREFIX.search(query) or REFERENTIAL_FOLLOWUP.search(query))
 
 
 def plan(query,prior,attachments=False):
