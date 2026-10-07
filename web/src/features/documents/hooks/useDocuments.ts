@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useMemo,useState} from 'react';
 import {useLab} from '../../../app/providers/LabProvider';
 import {base64File} from '../../../shared/api/client';
 import type {Doc,Source} from '../../../shared/types';
@@ -10,7 +10,7 @@ export interface DocumentAnswer {reply:string;sources:Source[];seconds:number;ci
 
 export function useDocuments(){
  const {api,connected,docs,library,refresh,setError}=useLab();
- const [selected,setSelected]=useState<string[]>([]),[embed,setEmbed]=useState(true),[replace,setReplace]=useState('');
+ const [selected,setSelected]=useState<string[]>([]),[libraryQuery,setLibraryQuery]=useState(''),[embed,setEmbed]=useState(true),[replace,setReplace]=useState('');
  const [collection,setCollection]=useState('General'),[folder,setFolder]=useState(''),[tags,setTags]=useState('');
  const [collections,setCollections]=useState<Array<{name:string;documents:number}>>([]),[folders,setFolders]=useState<FolderItem[]>([]);
  const [selectedCollection,setSelectedCollection]=useState(''),[selectedFolder,setSelectedFolder]=useState('');
@@ -27,6 +27,7 @@ export function useDocuments(){
  async function openDetail(doc:Doc){setDetail(doc);setVersions([]);try{setVersions(await api.get<Doc[]>('/library/documents/'+doc.id+'/versions'));}catch(error){setError((error as Error).message);}}
  async function restoreVersion(doc:Doc,version:number){setBusy(true);setProgress('Restoring historical version…');try{const restored=await api.post<Doc>('/library/documents/'+doc.id+'/versions/'+version+'/restore',{});setDetail(restored);setVersions(await api.get<Doc[]>('/library/documents/'+doc.id+'/versions'));await refresh();setProgress('Restored as version '+restored.version+'.');}catch(error){setError((error as Error).message);setProgress('Restore failed');}finally{setBusy(false);}}
  async function reindex(doc:Doc){setBusy(true);setProgress('Re-indexing…');try{await api.post('/library/documents/'+doc.id+'/reindex',{});await refresh();setProgress('Re-indexed as a new version.');}catch(error){setError((error as Error).message);}finally{setBusy(false);}}
+ const filteredDocs=useMemo(()=>{const q=libraryQuery.trim().toLowerCase();if(!q)return docs;return docs.filter(doc=>[doc.name,doc.collection,doc.folder,...(doc.tags||[]),doc.category,doc.topic].filter(Boolean).join(' ').toLowerCase().includes(q));},[docs,libraryQuery]);
  async function remove(doc:Doc){try{await api.remove('/library/documents/'+doc.id);setSelected(items=>items.filter(id=>id!==doc.id));await refresh();}catch(error){setError((error as Error).message);}}
- return {connected,docs,library,selected,setSelected,embed,setEmbed,replace,setReplace,collection,setCollection,folder,setFolder,tags,setTags,collections,folders,selectedCollection,setSelectedCollection,selectedFolder,setSelectedFolder,question,setQuestion,mode,setMode,busy,progress,detail,setDetail,versions,evidence,answer,source,setSource,refresh,upload,query,download,openDetail,restoreVersion,reindex,remove};
+ return {connected,docs,filteredDocs,libraryQuery,setLibraryQuery,library,selected,setSelected,embed,setEmbed,replace,setReplace,collection,setCollection,folder,setFolder,tags,setTags,collections,folders,selectedCollection,setSelectedCollection,selectedFolder,setSelectedFolder,question,setQuestion,mode,setMode,busy,progress,detail,setDetail,versions,evidence,answer,source,setSource,refresh,upload,query,download,openDetail,restoreVersion,reindex,remove};
 }
