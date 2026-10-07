@@ -119,7 +119,8 @@ try{
   await page.setViewportSize({width:viewport.width,height:viewport.height});
   await page.goto('http://127.0.0.1:4173/lab-assets/#/playground');
   await page.getByLabel('Message Keno').waitFor();
-  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`playground overflow at ${viewport.name}`);
+  const overflow=await page.evaluate(()=>{const width=innerWidth,scrollWidth=document.documentElement.scrollWidth;const offenders=[...document.querySelectorAll('*')].map(el=>{const box=el.getBoundingClientRect();return {tag:el.tagName,cls:String(el.className||'').slice(0,160),left:Math.round(box.left),right:Math.round(box.right),width:Math.round(box.width)};}).filter(item=>item.right>width+1||item.left<-1).sort((a,b)=>b.right-a.right).slice(0,8);return {width,scrollWidth,offenders};});
+  assert(overflow.scrollWidth<=overflow.width,`playground overflow at ${viewport.name}: ${JSON.stringify(overflow)}`);
   await page.screenshot({path:`artifacts/playground-${viewport.name}.png`,fullPage:true});
  }
  for(const routeName of ['settings','documents']){
