@@ -628,6 +628,19 @@ def test_action_gate_keeps_calculator_available(client):
     assert not main.app.state.generation_lock.locked()
 
 
+def test_duplicate_successful_tool_calls_are_reused_not_reexecuted(client):
+    main.app.state.laya = fake_router(family='memory')
+    main.app.state.llm = native_model([
+        [('memory_search', {'query':'favorite color'})],
+        [('memory_search', {'query':'favorite color'})],
+    ])
+    result = send(client, new_conversation(client), request_id='duplicate-tool-001', message='What do you know about my favorite color?').json()
+    assert [event['status'] for event in result['context']['tool_calls']] == ['complete', 'reused']
+    assert result['context']['duplicate_tool_calls_reused'] == 1
+    assert result['context']['unique_tool_executions'] == 1
+    assert result['context']['tool_execution_efficiency'] == 0.5
+
+
 def test_name_is_relevant_only_and_bad_preamble_not_replayed(client):
     main.app.state.laya = fake_router(family='none')
     client.put('/api/v1/memories/user.name', json={'key':'user.name', 'content':'my name is Zain', 'pinned':True})

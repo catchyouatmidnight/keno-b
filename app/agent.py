@@ -23,6 +23,7 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     metadata["tool_save_required"] = required_save
     started, count = time.monotonic(), 0
     planning_seconds, execution_seconds, retrieval_seconds, action_seconds, rounds = 0.0, 0.0, 0.0, 0.0, 0
+    successful_tool_results, duplicate_tool_calls_reused = {}, 0
     name_save = tools.explicit_name_save(session.value.message) if required_save else None
     direct_save = name_save or (tools.explicit_field_save(session.value.message) if required_save else None)
     natural = tools.natural_memory(session.value.message, session.settings) if not session.attachments else None
@@ -193,8 +194,15 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                 if name not in allowed: raise ValueError("Tool was not allowed for this request")
                 if not isinstance(raw, str) or len(raw) > 8000: raise ValueError("Tool arguments exceed limit")
                 args = json.loads(raw)
-                result = await session.execute(name, args)
-                status = "complete"
+                fingerprint = name + ":" + json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                if fingerprint in successful_tool_results:
+                    result = successful_tool_results[fingerprint]
+                    status = "reused"
+                    duplicate_tool_calls_reused += 1
+                else:
+                    result = await session.execute(name, args)
+                    successful_tool_results[fingerprint] = result
+                    status = "complete"
                 may_continue |= name in {"memory_search", "document_search", "document_read", "document_overview", "web_search", "web_inspect"}
             except (ValueError, TypeError, KeyError, SyntaxError, ArithmeticError, httpx.HTTPError) as error:
                 detail = str(error) if isinstance(error, tools.ToolValidationError) else "Tool failed validation or is unavailable. Do not claim it succeeded. Ask for missing details or retry with valid arguments."
@@ -223,6 +231,9 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
     metadata["retrieval_seconds"] = round(retrieval_seconds, 3)
     metadata["action_tool_seconds"] = round(action_seconds, 3)
     metadata["tool_planning_rounds"] = rounds
+    metadata["duplicate_tool_calls_reused"] = duplicate_tool_calls_reused
+    metadata["unique_tool_executions"] = max(0, len(session.events) - duplicate_tool_calls_reused)
+    metadata["tool_execution_efficiency"] = round(metadata["unique_tool_executions"] / max(1, len(session.events)), 3)
     metadata["agent_steps"] = list(session.events)
     metadata["tool_calls"] = session.events
     metadata["memory_changes"] = [{"action": m["action"], "key": m["key"]} for m in session.mutations]
