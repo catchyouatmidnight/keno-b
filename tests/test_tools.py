@@ -596,7 +596,7 @@ def test_answer_only_gate_skips_false_multiple_planner_and_streams(client):
         raw = connection.execute("SELECT metadata FROM turns WHERE request_id='advice-gate-001'").fetchone()[0]
     metadata=json.loads(raw)
     assert 'tool_family' not in metadata['route']['decisions']
-    assert metadata['route']['question_count'] == 2
+    assert metadata['route']['question_count'] == 3
     assert metadata['route']['call_count'] == 1
     assert metadata['route']['tool_family'] == 'none'
     assert metadata['route']['tool_policy'] == 'answer_only'
@@ -616,8 +616,8 @@ def test_action_gate_keeps_calculator_available(client):
     response = send(client, new_conversation(client), message='Calculate 17 times 23').json()
     assert response['context']['route']['tool_policy'] == 'action_route'
     assert response['context']['route']['question_count'] == 3
-    assert response['context']['route']['call_count'] == 2
-    assert [list(body['questions']) for body in routed] == [['thinking', 'tool_need'], ['tool_family']]
+    assert response['context']['route']['call_count'] == 1
+    assert [list(body['questions']) for body in routed] == [['thinking', 'tool_need', 'tool_family']]
     assert response['context']['tool_calls'][0]['status'] == 'complete'
     main.app.state.laya = fake_router(family='invalid', tool_need='action')
     invalid = send(client, new_conversation(client), request_id='invalid-family-stage', message='Calculate 2+2')
@@ -817,3 +817,24 @@ def test_response_style_memory_is_deterministic_and_persists_across_topics(clien
     assert 'Persistent USER preferences' not in system
     assert 'Persistent USER preferences from memory' in current
     assert text in current
+
+
+def test_new_question_after_a_web_search_is_not_appended_to_the_old_query(client):
+    client.put('/api/v1/tools/settings', json={'search_enabled': True})
+    outbound = []
+    def lookup(request):
+        payload = json.loads(request.content)
+        outbound.append(payload['query'])
+        rows = [{'title': 'Result', 'url': 'https://example.com/a', 'snippet': 'details ' * 30}]
+        return httpx.Response(200, json={'query': payload['query'], 'results': rows,
+            'sources': [{'title': 'Result', 'url': 'https://example.com/a'}], 'coverage': 'search snippets only'})
+    main.app.state.lookup = httpx.AsyncClient(base_url='http://lookup:8000', transport=httpx.MockTransport(lookup))
+    main.app.state.laya = fake_router(family='none')
+    main.app.state.llm = fake_model(chunks=['Paris.'])
+    conversation = new_conversation(client)
+    first = send(client, conversation, request_id='search-new-001', message='Search the web for Indonesia football results.').json()
+    assert first['context']['route']['tool_policy'] == 'explicit_web_search'
+    second = send(client, conversation, request_id='search-new-002', message='But what is the capital of France?').json()
+    assert second['context']['route']['engine'] == 'laya'
+    assert second['context']['route']['tool_policy'] == 'answer_only'
+    assert len(outbound) == 1

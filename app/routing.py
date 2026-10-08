@@ -1,5 +1,6 @@
 """Bounded, private Laya decisions. This module never generates chat responses."""
 import math
+import os
 import time
 
 import httpx
@@ -37,6 +38,10 @@ DOCUMENT_TOOL_NEED = {"type": "choice",
         "answer": "explain, summarize, search passages, read a page, translate, compare documents, extract facts or analyze supplied files/images; answer document follow-ups such as tell me more about secure onboarding; ordinary chat",
         "action": "also perform arithmetic with a calculator, explicitly look up live weather or web information, or save/recall/correct/forget firsthand personal user memory; these operations go beyond reading supplied files"}}
 
+# Default keeps the latency policy: a low-confidence "deep" label answers
+# without thinking. Set true to give those requests the reduced budget instead.
+UNCERTAIN_DEEP_THINKING = os.environ.get("UNCERTAIN_DEEP_THINKING", "false").lower() == "true"
+
 OPTIONS = {"thinking": {"quick", "deep"}, "tool_need": {"answer", "action"},
            "source": {"text", "vision"}, "document_scope": {"overview", "focused"},
            "tool_family": {"none", "memory", "documents", "calculator", "live", "multiple"}}
@@ -69,31 +74,33 @@ async def decide(client, message, history, attachments):
     state = {"latest_request": message[:2400], "request_truncated": len(message) > 2400,
              "earlier_user_requests": history[-600:],
              "attachments": [{k: a[k] for k in ("id", "name", "kind", "pages", "characters")} for a in attachments]}
-    # A separate binary necessity check prevents a broad family choice from
-    # turning advice into an unnecessary multi-tool planner call.
+    # tool_need gates tool routing, so tool_family rides along in the same Laya
+    # pass and is simply discarded when the turn is a plain answer. One local
+    # call replaces two sequential ones on action turns.
     # Laya still decides quick/deep for every request; this is not a keyword router.
     questions = ({"thinking": QUESTIONS["thinking"], "source": QUESTIONS["source"],
                   "document_scope": QUESTIONS["document_scope"], "tool_need": DOCUMENT_TOOL_NEED}
-                 if attachments else {"thinking": QUESTIONS["thinking"], "tool_need": TOOL_NEED})
+                 if attachments else {"thinking": QUESTIONS["thinking"], "tool_need": TOOL_NEED,
+                                      "tool_family": QUESTIONS["tool_family"]})
     try:
         decisions = await predict(client, state, questions)
         call_count, question_count = 1, len(questions)
-        # Advice needs no family classification. Only action turns pay for the
-        # second local request. Document-only turns never classify a broad
-        # family: an ambiguous 'multiple' label cannot re-enable the planner.
-        if decisions["tool_need"]["choice"] == "action":
-            decisions.update(await predict(client, state, {"tool_family": QUESTIONS["tool_family"]}))
-            call_count += 1
-            question_count += 1
-        uncertain = decisions["thinking"]["confidence"] < 0.65 or state["request_truncated"]
+        if decisions["tool_need"]["choice"] != "action":
+            decisions.pop("tool_family", None)
+        truncated = state["request_truncated"]
+        deep_choice = decisions["thinking"]["choice"] == "deep"
+        confident = decisions["thinking"]["confidence"] >= 0.65
+        uncertain = not confident or truncated
         # Latency policy: require a confident deep choice. Preserve Laya's raw
         # decision for inspection; uncertain short requests default to quick.
-        thinking = (decisions["thinking"]["choice"] == "deep"
-                    and decisions["thinking"]["confidence"] >= 0.65) or state["request_truncated"]
+        # A truncated request cannot be judged from its visible part, so it
+        # always thinks, with the full budget.
+        thinking = (deep_choice and (confident or UNCERTAIN_DEEP_THINKING)) or truncated
+        reduced_thinking = thinking and not confident and not truncated
         vision = bool(attachments) and (decisions["source"]["choice"] == "vision" or
                  any(a["kind"] == "image" or not a["characters"] for a in attachments))
         family = decisions["tool_family"]["choice"] if "tool_family" in decisions else "none"
-        return {"engine": "laya", "thinking": thinking, "vision": vision,
+        return {"engine": "laya", "thinking": thinking, "reduced_thinking": reduced_thinking, "vision": vision,
                 "document_scope": decisions["document_scope"]["choice"] if attachments else "focused",
                 "question_count": question_count, "call_count": call_count,
                 "tool_family": family,
@@ -101,7 +108,8 @@ async def decide(client, message, history, attachments):
                                if decisions["tool_need"]["choice"] == "answer" else
                                "attachment_action" if attachments else "action_route",
                 "uncertain": uncertain, "decisions": decisions,
-                "effort_policy": "truncated_deep" if state["request_truncated"] else
+                "effort_policy": "truncated_deep" if truncated else
+                                 "uncertain_deep" if reduced_thinking else
                                  "uncertain_quick" if uncertain else "laya_choice",
                 "seconds": round(time.monotonic() - start, 3)}
     except (httpx.HTTPError, ValueError, KeyError, TypeError):

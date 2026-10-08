@@ -515,6 +515,7 @@ async def delete_skill(skill_id: str):
     with db() as c:
         if not c.execute("DELETE FROM skills WHERE id=?", (skill_id,)).rowcount:
             raise HTTPException(404, "Skill not found")
+        c.execute("DELETE FROM skill_versions WHERE skill_id=?", (skill_id,))
     return {"deleted": skill_id}
 
 
@@ -1053,7 +1054,7 @@ async def fit_context(value, route=None, attachments=None):
         raise HTTPException(422, "This request needs vision; install the matching projector first")
     limits = execution_limits(value)
     thinking_tokens = THINKING_BUDGET if route["thinking"] else 0
-    if route["thinking"] and route.get("uncertain"):
+    if route["thinking"] and route.get("reduced_thinking"):
         thinking_tokens = UNCERTAIN_THINKING_BUDGET
     if limits["thinking_budget"] is not None:
         thinking_tokens = limits["thinking_budget"] if route["thinking"] or value.execution_mode == "deep" else 0
@@ -1594,7 +1595,6 @@ async def chat(value: ChatInput):
             try:
                 parsed_skill = skills.validate_tools(skills.parse(teach_markdown), tools.SPECS)
             except skills.SkillError as error:
-                app.state.generation_lock.release()
                 raise HTTPException(422, str(error))
             with db() as c:
                 taught_skill = skills.save(c, parsed_skill, now())
@@ -1629,6 +1629,9 @@ async def chat(value: ChatInput):
                 route = deterministic_route("explicit_memory_command", "memory")
             elif tools.natural_memory(value.message, setting('tools')):
                 route = deterministic_route("natural_memory", "memory")
+            elif context_policy.ROUTINE.fullmatch(value.message):
+                # A bare greeting or thanks needs no tools, vision or reasoning: skip the Laya pass.
+                route = deterministic_route("answer_only")
         if route is None:
             route = await routing.decide(app.state.laya, value.message, history, attachments)
         if not attachments and re.fullmatch(r"(?:tell me more|expand on that|explain further)[.!?]*", value.message.strip(), re.I):

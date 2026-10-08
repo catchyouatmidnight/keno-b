@@ -14,8 +14,17 @@ STOP=QUERY_STOP_WORDS|{'hello','hi','hey','testing','test','can','do','does','u'
 def words(text):return set(re.findall(r'\w+',text.casefold()))-STOP
 
 
+# Openers and pronouns also begin brand-new questions ("But what is the capital
+# of France?", "This is about my taxes"). Treat them as elliptical follow-ups
+# only while the message stays short; these markers stay elliptical at any length.
+ELLIPTICAL_MARKER=re.compile(r"^\s*(?:what about|how about|i mean|i meant|kalau|actually|no[, ])\b",re.I)
+ELLIPTICAL_WORDS=6
+
+
 def is_followup(query):
-    return bool(FOLLOWUP.fullmatch(query) or ACK_FOLLOWUP.fullmatch(query) or FOLLOWUP_PREFIX.search(query) or REFERENTIAL_FOLLOWUP.search(query))
+    if FOLLOWUP.fullmatch(query) or ACK_FOLLOWUP.fullmatch(query):return True
+    if not (FOLLOWUP_PREFIX.search(query) or REFERENTIAL_FOLLOWUP.search(query)):return False
+    return bool(ELLIPTICAL_MARKER.search(query)) or len(query.split())<=ELLIPTICAL_WORDS
 
 
 def plan(query,prior,attachments=False):

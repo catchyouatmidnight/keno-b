@@ -68,6 +68,8 @@ services:
       - "1"
       - --threads
       - ${CPU_THREADS:-4}
+      - --threads-batch
+      - ${CPU_THREADS_BATCH:-${CPU_THREADS:-4}}
       - --batch-size
       - "256"
       - --ubatch-size

@@ -98,7 +98,7 @@ def new_conversation(client):
 
 
 def send(client, conversation, **kwargs):
-    return client.post("/api/v1/chat", json={"conversation_id": conversation, "message": "Hi", "request_id": "request-0001", **kwargs})
+    return client.post("/api/v1/chat", json={"conversation_id": conversation, "message": "Hi Keno, quick check", "request_id": "request-0001", **kwargs})
 
 
 def test_fresh_install_auth_and_restart(client):
@@ -322,8 +322,8 @@ def test_laya_automatically_controls_thinking_and_fails_explicitly(client):
     assert requests[1]['reasoning_format'] == 'deepseek'
     assert 'Hi' in decisions[-1]['state']['earlier_user_requests']
     assert 'Hello Zain' not in decisions[-1]['state']['earlier_user_requests']
-    assert list(decisions[-1]['questions']) == ['thinking', 'tool_need']
-    assert quick['context']['route']['question_count'] == 2
+    assert list(decisions[-1]['questions']) == ['thinking', 'tool_need', 'tool_family']
+    assert quick['context']['route']['question_count'] == 3
     assert quick['context']['route']['call_count'] == 1
     assert quick['context']['model_first_delta_seconds'] <= quick['context']['model_first_token_seconds']
     assert quick['context']['model_first_reasoning_seconds'] >= 0
@@ -771,3 +771,75 @@ def test_unrelated_query_keeps_preference_but_not_unrelated_fact(client):
     selected=main.select_memories('How long does it take to boil an egg?')
     assert [m['key'] for m in selected] == ['style']
     assert 'Always end every response with Sir' not in main.system_prompt(selected)
+
+
+def test_truncated_request_thinks_with_the_full_budget(client):
+    main.app.state.llm = fake_model()
+    main.app.state.laya = fake_router(confidence=0.9)
+    result = send(client, new_conversation(client), request_id='truncated-001', message='Analyse this. ' + 'detail ' * 400).json()
+    route = result['context']['route']
+    assert route['thinking'] is True and route['effort_policy'] == 'truncated_deep'
+    assert route['reduced_thinking'] is False
+    assert result['context']['thinking_budget'] == 384
+
+
+def test_uncertain_deep_uses_reduced_budget_only_when_enabled(client, monkeypatch):
+    main.app.state.llm = fake_model()
+    main.app.state.laya = fake_router(thinking='deep', confidence=0.6)
+    off = send(client, new_conversation(client), request_id='uncertain-off-001', message='Compare these plans').json()
+    assert off['context']['route']['thinking'] is False and off['context']['thinking_budget'] == 0
+    monkeypatch.setattr(main.routing, 'UNCERTAIN_DEEP_THINKING', True)
+    on = send(client, new_conversation(client), request_id='uncertain-on-001', message='Compare these plans').json()
+    assert on['context']['route']['effort_policy'] == 'uncertain_deep'
+    assert on['context']['route']['reduced_thinking'] is True
+    assert on['context']['thinking_budget'] == main.UNCERTAIN_THINKING_BUDGET
+
+
+def test_routine_greeting_skips_laya(client):
+    routed = []
+    main.app.state.llm = fake_model()
+    main.app.state.laya = fake_router(seen=routed)
+    result = send(client, new_conversation(client), request_id='greeting-001', message='Hello!').json()
+    assert routed == []
+    assert result['context']['route']['engine'] == 'deterministic'
+    assert result['context']['route']['tool_policy'] == 'answer_only'
+    assert result['context']['route']['thinking'] is False
+    send(client, new_conversation(client), request_id='greeting-002', message='Hello, plan my week please')
+    assert len(routed) == 1
+
+
+@pytest.mark.parametrize('message,expected', [
+    ('But what is the capital of France?', False),
+    ('This is a new question about my tax return', False),
+    ('Then plan a three day trip to Bali for my family', False),
+    ('and in Paris?', True), ('what about tomorrow', True), ('it was yesterday', True),
+    ('what about the second option we looked at earlier today', True),
+    ('yea duh', True), ('why', True), ('make it shorter', True)])
+def test_followup_detection_ignores_long_new_questions(message, expected):
+    from app import context_policy
+    assert context_policy.is_followup(message) is expected
+
+
+def test_invalid_taught_skill_is_rejected_and_releases_the_lock(client):
+    main.app.state.llm = fake_model()
+    main.app.state.laya = fake_router()
+    conversation = new_conversation(client)
+    rejected = send(client, conversation, request_id='teach-bad-001', message='teach skill: ---\nname: Bad\nrequires:\n  - no_such_tool\n---\nDo it.')
+    assert rejected.status_code == 422 and 'Unknown required tool' in rejected.json()['detail']
+    assert not main.app.state.generation_lock.locked()
+    assert send(client, conversation, request_id='teach-bad-002', message='Tell me a story about rivers').status_code == 200
+
+
+def test_deleted_skill_does_not_leave_restorable_versions(client):
+    markdown = '---\nname: Recap\ntriggers:\n  - recap workflow\n---\nSummarize the conversation.'
+    skill = client.post('/api/v1/skills/import', json={'markdown': markdown}).json()
+    client.post('/api/v1/skills/' + skill['id'] + '/import', json={'markdown': markdown + ' Briefly.'})
+    assert client.delete('/api/v1/skills/' + skill['id']).status_code == 200
+    again = client.post('/api/v1/skills/import', json={'markdown': markdown}).json()
+    assert again['version'] == 1
+    assert client.get('/api/v1/skills/' + skill['id'] + '/history').json() == []
+
+
+def test_skill_front_matter_may_be_empty():
+    from app import skills
+    assert skills.parse('---\n---\n# Plain\n\nDo the thing.')['name'] == 'Plain'

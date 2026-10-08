@@ -35,7 +35,7 @@ def _frontmatter(markdown):
     text=markdown.replace("\r\n","\n").strip()
     if not text.startswith("---\n"):
         return {},text
-    end=text.find("\n---\n",4)
+    end=text.find("\n---\n",3)
     if end<0:
         raise SkillError("Skill front matter must end with ---")
     header,body=text[4:end],text[end+5:].strip()
