@@ -139,13 +139,14 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                     'function': {'name': 'web_inspect', 'arguments': json.dumps({'source_index': source_index})}}]})
                 messages.append({'role': 'tool', 'tool_call_id': inspect_id, 'content': json.dumps(inspected, ensure_ascii=False)})
             if inspected_rows:
-                # Each inspection repeats that row's evidence and facts verbatim. Prompt
-                # processing dominates search latency on CPU, so send them to the model once.
-                rows = [{k: v for k, v in row.items() if k not in {'page_excerpt', 'facts'}
-                         and not (k == 'snippet' and not row.get('page_excerpt'))}
-                        if index in inspected_rows else row
+                # Each inspection repeats that row's title, URL, evidence and facts verbatim. Prompt
+                # processing dominates search latency on CPU, so send them to the model once: an
+                # inspected row keeps only its search snippet, when that is not already the evidence.
+                rows = [row if index not in inspected_rows else
+                        {'source_index': index, 'snippet': row.get('snippet', '')} if row.get('page_excerpt') and row.get('snippet') else None
                         for index, row in enumerate(result.get('results', []), 1)]
-                search_message['content'] = json.dumps({k: v for k, v in {**result, 'results': rows}.items() if k != 'sources'}, ensure_ascii=False)
+                search_message['content'] = json.dumps({k: v for k, v in {**result, 'results': [row for row in rows if row]}.items()
+                                                        if k not in {'sources', 'cache_hit'}}, ensure_ascii=False)
         if required_result_save and status == 'complete':
             request_definitions = [tools.SPECS['memory_save_result']]
             allowed = {'memory_save_result'}

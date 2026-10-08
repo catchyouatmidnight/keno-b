@@ -933,8 +933,8 @@ def test_page_facts_are_bounded_before_reaching_the_model(client):
     from app import tools
     claims = [{'kind': 'numeric', 'key': f'template {i} ' + 'k' * 170, 'value': '1 | 2', 'raw': f'Sentence {i} with the result 3-1. ' + 'r' * 300} for i in range(16)]
     compact = tools.compact_facts({'scores': [f'{i}-0' for i in range(20)], 'dates': ['1 January 2026'], 'claims': claims})
-    assert len(compact['scores']) == 8 and len(compact['claims']) == 4
-    assert all(len(claim) <= 200 and claim.startswith('Sentence') for claim in compact['claims'])
+    assert len(compact['scores']) == 5 and len(compact['claims']) == 3
+    assert all(len(claim) <= 180 and claim.startswith('Sentence') for claim in compact['claims'])
     assert tools.compact_facts(None) == {} and tools.compact_facts({'claims': []}) == {}
     client.put('/api/v1/tools/settings', json={'search_enabled': True})
     def lookup(request):

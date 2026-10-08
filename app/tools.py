@@ -254,16 +254,21 @@ def catalog(family, settings, message, attachments):
     return [SPECS[n] for n in names]
 
 
+# Prompt processing on CPU runs at roughly 20-50 tokens/s, so every 1,000 characters of web
+# evidence adds about ten seconds before the first word. These bounds trade depth for latency.
+WEB_EXCERPT_CHARS = 500
+
+
 def compact_facts(facts):
     """Bound page facts for the prompt. The lookup service's claim templates are for its own
     cross-source verification; unbounded, one page's facts exceeded 3,800 tokens and the whole
     search result was then dropped to fit the context."""
     if not isinstance(facts, dict):
         return {}
-    claims = [str(claim.get("raw") or claim.get("value") or "")[:200] for claim in facts.get("claims") or [] if isinstance(claim, dict)]
-    compact = {"scores": [str(v)[:20] for v in (facts.get("scores") or [])[:8]],
-               "dates": [str(v)[:40] for v in (facts.get("dates") or [])[:8]],
-               "claims": [claim for claim in dict.fromkeys(claims) if claim][:4]}
+    claims = [str(claim.get("raw") or claim.get("value") or "")[:180] for claim in facts.get("claims") or [] if isinstance(claim, dict)]
+    compact = {"scores": [str(v)[:20] for v in (facts.get("scores") or [])[:5]],
+               "dates": [str(v)[:40] for v in (facts.get("dates") or [])[:5]],
+               "claims": [claim for claim in dict.fromkeys(claims) if claim][:3]}
     return {key: value for key, value in compact.items() if value}
 
 
@@ -484,7 +489,7 @@ class ToolSession:
                                     "snippet": str(row.get("snippet", ""))[:320],
                                     "published_at": str(row.get("published_at", ""))[:80],
                                     "quality_score": row.get("quality_score"),
-                                    "page_excerpt": str(page.get("excerpt", ""))[:1000] if page.get("fetched") else "",
+                                    "page_excerpt": str(page.get("excerpt", ""))[:WEB_EXCERPT_CHARS] if page.get("fetched") else "",
                                     "page_fetched": bool(page.get("fetched")),
                                     "facts": compact_facts(page.get("facts"))})
                 result = {**result, "results": compact}
