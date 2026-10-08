@@ -188,12 +188,14 @@ def teach_markdown(text):
 
 def match(connection, query, threshold=.68):
     started=time.monotonic(); rows=[row for row in list_skills(connection) if row["enabled"]]
-    explicit_match=re.fullmatch(r"\s*run\s+skill\s+(.+?)\s*[.!]?\s*",query,re.I)
+    explicit_match=re.fullmatch(r"\s*run\s+skill\s+(.+?)\s*[.!]?\s*",query,re.I|re.S)
     if explicit_match:
-        wanted=_norm(explicit_match.group(1))
-        exact=next((row for row in rows if _norm(row["name"])==wanted or _norm(row["id"])==wanted),None)
-        if exact:
-            return {**exact,"score":1.0,"match_reason":"explicit invocation","explicit_invocation":True},round(time.monotonic()-started,6),[{"id":exact["id"],"score":1.0}]
+        # "run skill <name>" or "run skill <name>: <input>"; the whole text is tried first so names may contain colons.
+        named,_,supplied=explicit_match.group(1).partition(":")
+        for wanted,skill_input in ((_norm(explicit_match.group(1)),""),(_norm(named),supplied.strip())):
+            exact=next((row for row in rows if wanted and (_norm(row["name"])==wanted or _norm(row["id"])==wanted)),None)
+            if exact:
+                return {**exact,"score":1.0,"match_reason":"explicit invocation","explicit_invocation":True,"skill_input":skill_input},round(time.monotonic()-started,6),[{"id":exact["id"],"score":1.0}]
     ranked=[]
     for row in rows:
         score,reason=_score(query,row)

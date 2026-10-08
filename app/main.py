@@ -1017,7 +1017,8 @@ async def fit_context(value, route=None, attachments=None):
     skill_blocked_tools = []
     skill_confirmation_required = False
     if matched_skill:
-        skill_definitions = tools.skill_catalog(matched_skill["required_tools"], tool_settings, value.message, attachments)
+        skill_definitions = tools.skill_catalog(matched_skill["required_tools"], tool_settings, value.message, attachments,
+                                                explicit=bool(matched_skill.get("explicit_invocation")))
         skill_tool_names = {d["function"]["name"] for d in skill_definitions}
         skill_blocked_tools = [name for name in matched_skill["required_tools"] if name not in skill_tool_names]
         skill_confirmation_required = matched_skill["risk"] == "high" and not matched_skill.get("explicit_invocation")
@@ -1031,6 +1032,8 @@ async def fit_context(value, route=None, attachments=None):
             elif route.get("tool_policy") not in {"local_calendar","document_evidence_answer"}:
                 route["tool_policy"] = "skill"
             route["skill_id"] = matched_skill["id"]
+            if matched_skill.get("explicit_invocation"):
+                route["skill_write_tools"] = sorted(set(matched_skill["required_tools"]) & tools.MEMORY_WRITE_TOOLS)
     if not memory_enabled:
         definitions = [d for d in definitions if not d["function"]["name"].startswith("memory_")]
         if route.get("tool_family") == "memory":
@@ -1398,7 +1401,7 @@ async def generate(value, messages, metadata, request_started=None, attachments=
         skill_guarded = None
         if metadata.get("skill_confirmation_required"):
             pending = metadata.get("skill_match") or {}
-            skill_guarded = "This matched a high-risk reusable skill. Run it explicitly with `run skill " + str(pending.get("name") or pending.get("id") or "skill") + "` before I use it."
+            skill_guarded = "This matched a high-risk reusable skill. Run it explicitly with `run skill " + str(pending.get("name") or pending.get("id") or "skill") + "` (add `: <details>` to pass it input) before I use it."
         elif metadata.get("skill_blocked_tools"):
             skill_guarded = "I matched a reusable skill, but its required tool(s) are unavailable right now: " + ", ".join(metadata["skill_blocked_tools"]) + "."
         guarded = calendar_guarded or calculation_guarded or memory_disabled_guarded or skill_teach_guarded or skill_guarded or search_guarded or tools.weather_reply(session, metadata)

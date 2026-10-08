@@ -117,11 +117,27 @@ def explicit_field_save(text):
     return {'key': 'user.fact.' + fact[0].replace(' ', '_'), 'quote': match['quote'].rstrip('.!'), 'category': 'fact'}
 
 
+WORD_OPERATORS = ((r"multiplied\s+by|times|dikali(?:kan)?|kali", "*"), (r"divided\s+by|dibagi|bagi", "/"),
+                  (r"plus|ditambah|tambah", "+"), (r"minus|dikurangi?|kurang", "-"))
+
+
 def explicit_calculation(text):
-    match = re.fullmatch(r"\s*(?:please\s+)?calculate\s+([0-9\s.+*/()%−×÷-]{1,200})\s*[?]?", text, re.I)
+    """Pure arithmetic is answered by the calculator directly; a planner pass costs seconds on CPU."""
+    if not isinstance(text, str) or len(text) > 300:
+        return None
+    match = re.fullmatch(r"\s*(?:please\s+)?(?P<verb>calculate|compute|hitung|what\s+is|what['’]s|how\s+much\s+is|berapa)\s+(?P<body>.{1,250}?)\s*[?.]?\s*", text, re.I)
     if not match:
         return None
-    expression = match[1].strip().replace('×', '*').replace('÷', '/').replace('−', '-')
+    question = match['verb'].casefold() not in {'calculate', 'compute', 'hitung'}
+    expression = match['body'].replace('×', '*').replace('÷', '/').replace('−', '-')
+    for words, symbol in WORD_OPERATORS:
+        expression = re.sub(r"(?<=[\d)])\s*\b(?:" + words + r")\b\s*(?=[\d(.+-])", f" {symbol} ", expression, flags=re.I)
+    expression = re.sub(r"(?<=\d)\s*x\s*(?=\d)", " * ", expression, flags=re.I).strip()
+    if not re.fullmatch(r"[0-9\s.+*/()%-]{1,200}", expression):
+        return None
+    # "What is 42?", "what's 24/7?" and "what is 2020-2021?" are questions, not sums.
+    if question and (not re.search(r"[\d)]\s*[-+*/%]", expression) or re.fullmatch(r"\d+[/-]\d+", expression)):
+        return None
     try:
         calculate(expression)
     except (ValueError, SyntaxError, ArithmeticError):
@@ -238,8 +254,15 @@ def catalog(family, settings, message, attachments):
     return [SPECS[n] for n in names]
 
 
-def skill_catalog(names, settings, message, attachments):
-    """Expose only tools declared by the selected user skill and currently allowed by server settings."""
+MEMORY_WRITE_TOOLS = {"memory_save", "memory_forget", "memory_save_result"}
+
+
+def skill_catalog(names, settings, message, attachments, explicit=False):
+    """Expose only tools declared by the selected user skill and currently allowed by server settings.
+
+    Running a skill by name (`run skill <name>: <input>`) is the user's explicit request for the
+    memory changes that skill declares; an automatic trigger match never is.
+    """
     chosen=[name for name in dict.fromkeys(names) if name in SPECS]
     if not attachments:
         chosen=[name for name in chosen if not name.startswith("document_")]
@@ -247,8 +270,8 @@ def skill_catalog(names, settings, message, attachments):
         chosen=[name for name in chosen if name!="weather"]
     if not settings["search_enabled"]:
         chosen=[name for name in chosen if name not in {"web_search","web_inspect"}]
-    if not WRITE_REQUEST.search(message):
-        chosen=[name for name in chosen if name not in {"memory_save","memory_forget","memory_save_result"}]
+    if not explicit and not WRITE_REQUEST.search(message):
+        chosen=[name for name in chosen if name not in MEMORY_WRITE_TOOLS]
     return [SPECS[name] for name in chosen]
 
 
@@ -295,6 +318,8 @@ class ToolSession:
         self.web_verification = None
         self.research_evidence = []
         self.memory_conflicts = []
+        # Memory tools declared by a skill the user ran by name in this request.
+        self.skill_writes = set(self.route.get("skill_write_tools") or ())
 
     def rows(self, query=""):
         with self.db() as c:
@@ -336,7 +361,7 @@ class ToolSession:
             if not isinstance(query, str) or len(query) > 200: raise ToolValidationError("Memory query exceeds limit")
             return {"memories": self.rows(query)}
         if name == "memory_save_result":
-            if not WRITE_REQUEST.search(self.value.message):
+            if name not in self.skill_writes and not WRITE_REQUEST.search(self.value.message):
                 raise ToolValidationError("Saving a tool result requires an explicit current-user save or remember request")
             key, quote = args["key"], args["quote"]
             if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,100}", key):
@@ -354,11 +379,11 @@ class ToolSession:
             quote = self.quote(args["quote"], followup=name == "memory_save")
             if name == "memory_save" and NO_SAVE.search(self.value.message): raise ToolValidationError("The user requested no memory saving")
             if name == "memory_forget":
-                if NO_FORGET.search(self.value.message) or not FORGET_REQUEST.search(self.value.message): raise ToolValidationError("Forgetting requires an explicit current-user request")
+                if NO_FORGET.search(self.value.message) or (name not in self.skill_writes and not FORGET_REQUEST.search(self.value.message)): raise ToolValidationError("Forgetting requires an explicit current-user request")
                 if not any(r["key"] == key for r in self.rows(key)): return {"deleted": False, "key": key}
                 self.mutations.append({"action": "forget", "key": key})
                 return {"key": key, "deleted": True, "commits_with_answer": True}
-            if not self.settings["automatic_memory"] and not WRITE_REQUEST.search(self.value.message): raise ToolValidationError("Automatic memory is disabled")
+            if not self.settings["automatic_memory"] and name not in self.skill_writes and not WRITE_REQUEST.search(self.value.message): raise ToolValidationError("Automatic memory is disabled")
             if args["category"] not in {"profile", "fact", "preference", "project", "temporary"}: raise ToolValidationError("Invalid memory category")
             with self.db() as c:
                 previous = c.execute("SELECT content FROM memories WHERE key=?", (key,)).fetchone()

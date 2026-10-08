@@ -106,7 +106,9 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
             messages.append({'role': 'assistant', 'content': '', 'tool_calls': [{
                 'id': call_id, 'type': 'function',
                 'function': {'name': 'web_search', 'arguments': json.dumps(args, ensure_ascii=False)}}]})
-            messages.append({'role': 'tool', 'tool_call_id': call_id, 'content': json.dumps(result, ensure_ascii=False)})
+            search_message = {'role': 'tool', 'tool_call_id': call_id, 'content': json.dumps(result, ensure_ascii=False)}
+            messages.append(search_message)
+            inspected_rows = set()
             inspect_count = min(3 if result.get('verification', {}).get('conflict') else 2, len(result.get('results', [])))
             for source_index in range(1, inspect_count + 1):
                 if count >= call_limit - (1 if required_result_save else 0):
@@ -127,6 +129,8 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                 inspect_done = {**inspect_event, 'status': inspect_status}
                 if inspect_status == 'failed':
                     inspect_done['detail'] = inspected['error']
+                else:
+                    inspected_rows.add(source_index)
                 session.events.append(inspect_done)
                 yield 'tool', inspect_done
                 inspect_id = f'keno_direct_web_{count}'
@@ -134,6 +138,14 @@ async def plan(client, model, messages, definitions, session, metadata, check_bu
                     'id': inspect_id, 'type': 'function',
                     'function': {'name': 'web_inspect', 'arguments': json.dumps({'source_index': source_index})}}]})
                 messages.append({'role': 'tool', 'tool_call_id': inspect_id, 'content': json.dumps(inspected, ensure_ascii=False)})
+            if inspected_rows:
+                # Each inspection repeats that row's evidence and facts verbatim. Prompt
+                # processing dominates search latency on CPU, so send them to the model once.
+                rows = [{k: v for k, v in row.items() if k not in {'page_excerpt', 'facts'}
+                         and not (k == 'snippet' and not row.get('page_excerpt'))}
+                        if index in inspected_rows else row
+                        for index, row in enumerate(result.get('results', []), 1)]
+                search_message['content'] = json.dumps({k: v for k, v in {**result, 'results': rows}.items() if k != 'sources'}, ensure_ascii=False)
         if required_result_save and status == 'complete':
             request_definitions = [tools.SPECS['memory_save_result']]
             allowed = {'memory_save_result'}

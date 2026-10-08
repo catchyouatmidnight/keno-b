@@ -144,7 +144,7 @@ def test_calculator_executes_decimal_arithmetic_and_rejects_code(client):
     main.app.state.laya=fake_router(family='calculator')
     seen=[]
     main.app.state.llm=native_model([[('calculator',{'expression':'0.1 + 0.2'})]],seen=seen)
-    result=send(client,new_conversation(client),message='What is 0.1 + 0.2?').json()
+    result=send(client,new_conversation(client),message='Add 0.1 and 0.2 for me').json()
     assert result['context']['tool_calls'][0]['status']=='complete'
     tool_results=[json.loads(m['content']) for m in seen[-1] if m['role']=='tool']
     assert tool_results[0]['result']=='0.3'
@@ -506,7 +506,7 @@ def test_tool_completion_does_not_rewrite_system_prefix(client):
     requests=[]
     main.app.state.laya = fake_router(family='calculator')
     main.app.state.llm = native_model([[('calculator', {'expression':'2+2'})]], requests=requests)
-    response = send(client, new_conversation(client), message='What is 2+2?').json()
+    response = send(client, new_conversation(client), message='Add 2 and 2 for me').json()
     assert response['context']['tool_calls'][0]['status'] == 'complete'
     payloads=[body for path,body in requests if path == '/v1/chat/completions']
     assert len(payloads) == 2
@@ -613,7 +613,7 @@ def test_action_gate_keeps_calculator_available(client):
     routed=[]
     main.app.state.laya = fake_router(family='calculator', tool_need='action', seen=routed)
     main.app.state.llm = native_model([[('calculator', {'expression':'17*23'})]])
-    response = send(client, new_conversation(client), message='Calculate 17 times 23').json()
+    response = send(client, new_conversation(client), message='Multiply 17 by 23 for me').json()
     assert response['context']['route']['tool_policy'] == 'action_route'
     assert response['context']['route']['question_count'] == 3
     assert response['context']['route']['call_count'] == 1
@@ -838,3 +838,92 @@ def test_new_question_after_a_web_search_is_not_appended_to_the_old_query(client
     assert second['context']['route']['engine'] == 'laya'
     assert second['context']['route']['tool_policy'] == 'answer_only'
     assert len(outbound) == 1
+
+
+def test_direct_web_search_sends_each_page_excerpt_to_the_model_once(client):
+    client.put('/api/v1/tools/settings', json={'search_enabled': True})
+    def lookup(request):
+        payload = json.loads(request.content)
+        rows = [{'title': f'Report {i}', 'url': f'https://example.com/r{i}', 'snippet': f'short snippet {i}',
+                 'page': {'fetched': True, 'excerpt': f'UNIQUE-EXCERPT-{i} ' + 'body ' * 150, 'facts': {'score': f'FACT-{i}'}}} for i in range(3)]
+        return httpx.Response(200, json={'query': payload['query'], 'results': rows,
+            'sources': [{'title': r['title'], 'url': r['url']} for r in rows], 'coverage': 'pages'})
+    main.app.state.lookup = httpx.AsyncClient(base_url='http://lookup:8000', transport=httpx.MockTransport(lookup))
+    main.app.state.laya = fake_router(family='none')
+    calls = []
+    main.app.state.llm = fake_model(calls=calls, chunks=['Done.'])
+    result = send(client, new_conversation(client), request_id='search-once-001', message='Search the web for Keno-B release notes.').json()
+    assert [item['name'] for item in result['context']['tool_calls']] == ['web_search', 'web_inspect', 'web_inspect']
+    prompt = json.dumps([body for path, body in calls if path == '/v1/chat/completions'][-1]['messages'])
+    for i in range(2):
+        assert prompt.count(f'UNIQUE-EXCERPT-{i}') == 1 and prompt.count(f'FACT-{i}') == 1
+        assert f'short snippet {i}' in prompt and f'https://example.com/r{i}' in prompt
+    assert len(result['context']['web_sources']) == 2
+
+
+@pytest.mark.parametrize('message,expression', [
+    ('What is 1234 times 5678?', '1234 * 5678'), ('what is 17 times 23 plus 4', '17 * 23 + 4'),
+    ("What's (2 + 3) * 4?", '(2 + 3) * 4'), ('How much is 100 divided by 8?', '100 / 8'),
+    ('compute 12 x 12', '12 * 12'), ('Berapa 7 kali 8?', '7 * 8'), ('please calculate 10 minus 2.5', '10 - 2.5'),
+    ('What is 42?', None), ("what's 24/7?", None), ('what is 2020-2021', None), ('What is 5 plus my age?', None),
+    ('What is the capital of France?', None), ('What is 3 times better than this?', None), ('times 4', None),
+    ('Calculate 17*23 then explain compound interest', None)])
+def test_plain_language_arithmetic_is_parsed_only_when_it_is_pure_arithmetic(message, expression):
+    from app import tools
+    parsed = tools.explicit_calculation(message)
+    assert (parsed['expression'] if parsed else None) == expression
+
+
+def test_plain_language_arithmetic_skips_router_and_model(client):
+    routed, requests = [], []
+    main.app.state.laya = fake_router(seen=routed)
+    main.app.state.llm = native_model([], requests=requests)
+    result = send(client, new_conversation(client), request_id='word-math-001', message='What is 1234 times 5678?').json()
+    assert result['reply'] == '1234 * 5678 = 7006652.'
+    assert result['context']['route']['tool_policy'] == 'explicit_calculation'
+    assert routed == [] and not any(path == '/v1/chat/completions' for path, _ in requests)
+
+
+SAVE_SKILL = """---
+name: Save Workflow
+triggers:
+  - save with workflow
+requires:
+  - memory_save
+risk: high
+---
+Save only the fact explicitly supplied by the current user.
+"""
+
+
+def memory_keys():
+    with main.db() as connection:
+        return {row[0]: row[1] for row in connection.execute('SELECT key,content FROM memories')}
+
+
+def test_memory_skill_runs_only_when_invoked_by_name_with_input(client):
+    client.put('/api/v1/tools/settings', json={'automatic_memory': False})
+    assert client.post('/api/v1/skills/import', json={'markdown': SAVE_SKILL}).status_code == 200
+    main.app.state.laya = fake_router(family='none')
+    save = [[('memory_save', {'key': 'user.favorite_food', 'quote': 'my favorite food is rendang', 'category': 'preference'})]]
+    # A trigger match alone never unlocks memory writes.
+    main.app.state.llm = native_model(save)
+    automatic = send(client, new_conversation(client), request_id='skill-write-001', message='please use the workflow, my favorite food is rendang').json()
+    assert 'memory_save' not in automatic['context']['available_tools'] and memory_keys() == {}
+    main.app.state.llm = native_model(save)
+    ran = send(client, new_conversation(client), request_id='skill-write-002', message='run skill Save Workflow: my favorite food is rendang').json()
+    assert ran['context']['skill']['id'] == 'save-workflow' and ran['context']['skill_blocked_tools'] == []
+    assert ran['context']['available_tools'] == ['memory_save']
+    assert [(call['name'], call['status']) for call in ran['context']['tool_calls']] == [('memory_save', 'complete')]
+    assert memory_keys() == {'user.favorite_food': 'my favorite food is rendang'}
+
+
+def test_memory_skill_still_cannot_save_text_the_user_did_not_supply(client):
+    client.post('/api/v1/skills/import', json={'markdown': SAVE_SKILL})
+    main.app.state.laya = fake_router(family='none')
+    main.app.state.llm = native_model([[('memory_save', {'key': 'user.secret', 'quote': 'the user is a spy', 'category': 'fact'})]])
+    ran = send(client, new_conversation(client), request_id='skill-write-003', message='run skill Save Workflow: my favorite food is rendang').json()
+    assert ran['context']['tool_calls'][0]['status'] == 'failed' and memory_keys() == {}
+    main.app.state.llm = native_model([[('memory_save', {'key': 'user.favorite_food', 'quote': 'my favorite food is rendang', 'category': 'preference'})]])
+    refused = send(client, new_conversation(client), request_id='skill-write-004', message="run skill Save Workflow: don't save that my favorite food is rendang").json()
+    assert refused['context']['tool_calls'][0]['status'] == 'failed' and memory_keys() == {}
