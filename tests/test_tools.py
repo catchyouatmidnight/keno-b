@@ -845,7 +845,7 @@ def test_direct_web_search_sends_each_page_excerpt_to_the_model_once(client):
     def lookup(request):
         payload = json.loads(request.content)
         rows = [{'title': f'Report {i}', 'url': f'https://example.com/r{i}', 'snippet': f'short snippet {i}',
-                 'page': {'fetched': True, 'excerpt': f'UNIQUE-EXCERPT-{i} ' + 'body ' * 150, 'facts': {'score': f'FACT-{i}'}}} for i in range(3)]
+                 'page': {'fetched': True, 'excerpt': f'UNIQUE-EXCERPT-{i} ' + 'body ' * 150, 'facts': {'scores': [f'FACT-{i}']}}} for i in range(3)]
         return httpx.Response(200, json={'query': payload['query'], 'results': rows,
             'sources': [{'title': r['title'], 'url': r['url']} for r in rows], 'coverage': 'pages'})
     main.app.state.lookup = httpx.AsyncClient(base_url='http://lookup:8000', transport=httpx.MockTransport(lookup))
@@ -927,3 +927,26 @@ def test_memory_skill_still_cannot_save_text_the_user_did_not_supply(client):
     main.app.state.llm = native_model([[('memory_save', {'key': 'user.favorite_food', 'quote': 'my favorite food is rendang', 'category': 'preference'})]])
     refused = send(client, new_conversation(client), request_id='skill-write-004', message="run skill Save Workflow: don't save that my favorite food is rendang").json()
     assert refused['context']['tool_calls'][0]['status'] == 'failed' and memory_keys() == {}
+
+
+def test_page_facts_are_bounded_before_reaching_the_model(client):
+    from app import tools
+    claims = [{'kind': 'numeric', 'key': f'template {i} ' + 'k' * 170, 'value': '1 | 2', 'raw': f'Sentence {i} with the result 3-1. ' + 'r' * 300} for i in range(16)]
+    compact = tools.compact_facts({'scores': [f'{i}-0' for i in range(20)], 'dates': ['1 January 2026'], 'claims': claims})
+    assert len(compact['scores']) == 8 and len(compact['claims']) == 4
+    assert all(len(claim) <= 200 and claim.startswith('Sentence') for claim in compact['claims'])
+    assert tools.compact_facts(None) == {} and tools.compact_facts({'claims': []}) == {}
+    client.put('/api/v1/tools/settings', json={'search_enabled': True})
+    def lookup(request):
+        payload = json.loads(request.content)
+        rows = [{'title': f'Report {i}', 'url': f'https://example.com/r{i}', 'snippet': 's',
+                 'page': {'fetched': True, 'excerpt': 'Indonesia won 3-1.', 'facts': {'scores': ['3-1'], 'dates': [], 'claims': claims}}} for i in range(2)]
+        return httpx.Response(200, json={'query': payload['query'], 'results': rows, 'sources': [], 'coverage': 'pages'})
+    main.app.state.lookup = httpx.AsyncClient(base_url='http://lookup:8000', transport=httpx.MockTransport(lookup))
+    main.app.state.laya = fake_router(family='none')
+    calls = []
+    main.app.state.llm = fake_model(calls=calls, chunks=['Done.'])
+    send(client, new_conversation(client), request_id='search-facts-001', message='Search the web for Indonesia result.')
+    evidence = [m['content'] for m in [body for path, body in calls if path == '/v1/chat/completions'][-1]['messages'] if m['role'] == 'tool']
+    assert 'Indonesia won 3-1.' in ''.join(evidence) and 'Sentence 0 with the result' in ''.join(evidence)
+    assert 'template 0' not in ''.join(evidence) and sum(map(len, evidence)) < 4000

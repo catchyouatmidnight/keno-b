@@ -254,6 +254,19 @@ def catalog(family, settings, message, attachments):
     return [SPECS[n] for n in names]
 
 
+def compact_facts(facts):
+    """Bound page facts for the prompt. The lookup service's claim templates are for its own
+    cross-source verification; unbounded, one page's facts exceeded 3,800 tokens and the whole
+    search result was then dropped to fit the context."""
+    if not isinstance(facts, dict):
+        return {}
+    claims = [str(claim.get("raw") or claim.get("value") or "")[:200] for claim in facts.get("claims") or [] if isinstance(claim, dict)]
+    compact = {"scores": [str(v)[:20] for v in (facts.get("scores") or [])[:8]],
+               "dates": [str(v)[:40] for v in (facts.get("dates") or [])[:8]],
+               "claims": [claim for claim in dict.fromkeys(claims) if claim][:4]}
+    return {key: value for key, value in compact.items() if value}
+
+
 MEMORY_WRITE_TOOLS = {"memory_save", "memory_forget", "memory_save_result"}
 
 
@@ -473,7 +486,7 @@ class ToolSession:
                                     "quality_score": row.get("quality_score"),
                                     "page_excerpt": str(page.get("excerpt", ""))[:1000] if page.get("fetched") else "",
                                     "page_fetched": bool(page.get("fetched")),
-                                    "facts": page.get("facts") if isinstance(page.get("facts"), dict) else {}})
+                                    "facts": compact_facts(page.get("facts"))})
                 result = {**result, "results": compact}
                 urls = {row["url"] for row in compact if row["url"]}
                 result["sources"] = [source for source in result.get("sources", [])

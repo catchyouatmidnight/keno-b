@@ -1282,6 +1282,16 @@ async def check_tool_budget(messages, metadata, definitions):
                 result["shortened"] = True
                 result["complete_extracted_text"] = False
                 message["content"] = json.dumps(result, ensure_ascii=False)
+            elif isinstance(result, dict) and result.get("facts"):
+                # Web evidence degrades in steps instead of disappearing: page facts first, then excerpt length.
+                result.pop("facts")
+                message["content"] = json.dumps(result, ensure_ascii=False)
+                changed = True
+            elif isinstance(result, dict) and isinstance(result.get("evidence"), str) and len(result["evidence"]) > 200:
+                result["evidence"] = result["evidence"][:max(200, len(result["evidence"]) // 2)]
+                result["shortened"] = True
+                message["content"] = json.dumps(result, ensure_ascii=False)
+                changed = True
             elif len(message["content"]) > 800:
                 message["content"] = json.dumps({"error": "Tool result exceeded remaining context; narrow the request."})
                 changed = True
